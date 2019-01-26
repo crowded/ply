@@ -12,35 +12,35 @@ open System.Threading.Tasks
 
 [<AutoOpen>]
 module Builders = 
-    type TaskBuilder() =
-        inherit AwaitableBuilder()
-        member inline __.Run(f : unit -> Ply<'u>) : Task<'u> = 
+    type TaskBuilder<'TResult>() =
+        inherit AwaitableBuilder<'TResult>()
+        member inline this.Run(f : unit -> Ply<'TResult>) : Task<'TResult> = 
 #if NETSTANDARD2_0      
-            run f
+            this.DoRun(f)
 #else     
-            (run f).AsTask()
+            this.DoRun(f).AsTask()
 #endif
 
-    let task = TaskBuilder()
+    let task<'TResult> = TaskBuilder<'TResult>()
 
 #if !NETSTANDARD2_0
-    type ValueTaskBuilder() =
-        inherit AwaitableBuilder()
-        member inline __.Run(f : unit -> Ply<'u>) = run f
+    type ValueTaskBuilder<'TResult>() =
+        inherit AwaitableBuilder<'TResult>()
+        member inline this.Run(f : unit -> Ply<'TResult>) = this.DoRun(f)
     
-    let vtask = ValueTaskBuilder()
+    let vtask<'TResult> = ValueTaskBuilder<'TResult>()
 
-module AdvancedBuilders =
-    type UnsafeValueTaskBuilder() =
-        inherit AwaitableBuilder()
-        member inline __.Run(f : unit -> Ply<'u>) = runUnwrapped f
+// module AdvancedBuilders =
+//     type UnsafeValueTaskBuilder<'TResult>() =
+//         inherit AwaitableBuilder<'TResult>()
+//         member inline this.Run(f : unit -> Ply<'TResult>) = runUnwrapped this f
 
-    let uvtask = UnsafeValueTaskBuilder()
+//     let uvtask<'TResult> = UnsafeValueTaskBuilder<'TResult>()
 
-    type PlyBuilder() =
-        inherit AwaitableBuilder()
-        member inline __.Run(f : unit -> Ply<'u>) = f()
+//     type PlyBuilder<'TResult>() =
+//         inherit AwaitableBuilder<'TResult>()
+//         member inline __.Run(f : unit -> Ply<'TResult>) = f()
 
-    let ply = PlyBuilder()
+//     let ply<'TResult> = PlyBuilder<'TResult>()
 #endif
 
