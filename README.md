@@ -13,12 +13,13 @@ Compared to C#'s async-await Ply requires — for a regular method of a handful 
 
 *Allocated Memory/Op is removed as it isn't correct on .NET Core.*
 
-Ply comes with 4 builders: 
+Ply comes with 6 builders: 
 - `task (Task<'T>)` the only builder inside the netstandard build of Ply.
 - `vtask (ValueTask<'T>)`
 - `uvtask (ValueTask<'T>)`    
-**u**nsafe**v**alue**task** is the only allocation free TPL CE Ply comes with. This does come with a trade-off as it skips construction of an execution bubble. An execution bubble is made by any C# async-await method for capturing and restoring async local and synchronization context changes. These potential changes would otherwise escape onto the caller context. If you know however that you and any other synchronous methods you call don't make any changes there's nothing inherently unsafe about uvtask.
-
+**u**nsafe**v**alue**task** is the only allocation free value returning TPL CE Ply comes with. This does come with a trade-off as it skips construction of an execution bubble. An execution bubble is made by any C# async-await method for capturing and restoring async local and synchronization context changes. These potential changes would otherwise escape onto the caller context. If you know however that you and any other synchronous methods you call don't make any changes there's nothing inherently unsafe about uvtask.
+- `unitTask (Task)` As the TPL doesn't know F#s unit type `Task.FromResult(())` won't ever return a cached task, this CE works around that for `netcoreapp` consumers by checking the returned `ValueTask<unit>` for a succesful completion, if so it can directly return a CompletedTask. 
+- `uunitTask (Task)` A variant of unitTask with the same caveats as uvtask, the trade-off is that it can be truly allocation free.
 - `ply (Ply<'T>)` Can be enqueued directly onto the binding callsite's state machine, skips `Task` and safety wrapping
 
 More docs are coming.

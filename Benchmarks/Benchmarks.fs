@@ -4,7 +4,7 @@ open BenchmarkDotNet.Attributes
 open System.Threading.Tasks
 open FSharp.Control.Tasks.V2 // TaskBuilder.fs
 open FSharp.Control.Tasks.Builders // Ply
-open FSharp.Control.Tasks.AdvancedBuilders // Ply
+open FSharp.Control.Tasks.SpecializedBuilders // Ply
 
 [<MemoryDiagnoser>]
 [<SimpleJob(targetCount = 10)>]

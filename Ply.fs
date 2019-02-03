@@ -9,6 +9,7 @@ open System.Runtime.CompilerServices
 open System.Runtime.InteropServices
 open System.Threading.Tasks
 open System.Diagnostics
+open System.Runtime.ExceptionServices
 
 module Internal =
     type [<AbstractClass;AllowNullLiteral>] Awaitable<'u>() =
@@ -16,8 +17,12 @@ module Internal =
         abstract member GetNext: unit -> Ply<'u>
     and IAwaitingMachine = 
         abstract member AwaitUnsafeOnCompleted<'awt when 'awt :> ICriticalNotifyCompletion> : awt: byref<'awt> -> unit
-    
+
+#if NETSTANDARD2_0 
+type [<Struct>] Ply<'u> =
+#else 
 type [<IsReadOnly; Struct>] Ply<'u> =
+#endif
     val internal value : 'u
     val internal awaitable : Internal.Awaitable<'u> 
     new(result: 'u) = { value = result; awaitable = null }
@@ -42,6 +47,10 @@ module TplPrimitives =
 #endif   
 
     let inline defaultof<'T> = Unchecked.defaultof<'T>
+
+    let inline throwPreserve ex = 
+        (ExceptionDispatchInfo.Capture ex).Throw()
+        Unchecked.defaultof<_>
 
     let ret x = Ply(result = x)
     let zero = ret ()
@@ -123,10 +132,6 @@ module TplPrimitives =
             continuation = continuation
         }
         
-        override this.GetNext() = 
-            Debug.Assert(this.awaiterMethods.IsCompleted &this.awaiter || (typeof<'awt> = typeof<YieldAwaitable.YieldAwaiter>), "Forcing an async here")
-            this.continuation (this.awaiterMethods.GetResult &this.awaiter)
-
         override this.Await(csm) =
             if this.awaiterMethods.IsCompleted &this.awaiter then
                 false
@@ -134,9 +139,15 @@ module TplPrimitives =
                 csm.AwaitUnsafeOnCompleted(&this.awaiter) |> ignore
                 true 
 
+        override this.GetNext() = 
+            Debug.Assert(this.awaiterMethods.IsCompleted &this.awaiter || (typeof<'awt> = typeof<YieldAwaitable.YieldAwaiter>), "Forcing an async here")
+            this.continuation (this.awaiterMethods.GetResult &this.awaiter)
+
     and [<Sealed>] PlyAwaitable<'t, 'u> (awaitable: Awaitable<'t>, continuation: 't -> Ply<'u>) = 
         inherit Awaitable<'u>()
         let mutable awaitable = awaitable
+
+        override __.Await(csm) = awaitable.Await(&csm)
 
         override this.GetNext() = 
             let next =  awaitable.GetNext()
@@ -144,21 +155,19 @@ module TplPrimitives =
                 awaitable <- next.awaitable
                 Ply(await = this)
 
-        override __.Await(csm) = awaitable.Await(&csm)
-
     and [<Sealed>] ReusableSideEffectingAwaitable<'u> (awaitable: Awaitable<unit>, continuation: unit -> Ply<'u>) = 
         inherit Awaitable<'u>()
         let mutable awaitable = awaitable
 
         member internal __.Reset(aw) = awaitable <- aw 
 
+        override __.Await(csm) = awaitable.Await(&csm)
+
         override this.GetNext() =
             let next =  awaitable.GetNext()
             if next.IsCompletedSuccessfully then continuation() else
                 awaitable <- next.awaitable
                 Ply(await = this)
-
-        override __.Await(csm) = awaitable.Await(&csm)
 
     let run (f: unit -> Ply<'u>) =
         // ContinuationStateMachine contains a mutable struct so we need to prevent struct copies.
@@ -206,34 +215,83 @@ module TplPrimitives =
                 awaitable <- ReusableSideEffectingAwaitable(defaultof<_>, repeat)
                 repeat() 
             else 
-                awaitable <- ReusableSideEffectingAwaitable(next.awaitable, repeat)
-                Ply(await = awaitable)
+                Ply(await = ReusableSideEffectingAwaitable(next.awaitable, repeat))
         else zero
 
-    type [<IsReadOnly; Struct>]TaskAwaiterMethods<'t> = 
+    let tryWith(continuation : unit -> Ply<'u>) (catch : exn -> Ply<'u>) =
+        try
+            let next = continuation()
+            if next.IsCompletedSuccessfully then next else 
+                let mutable awaitable = next.awaitable
+                Ply(await = { new Awaitable<'u>() with 
+                    override __.Await(csm) = awaitable.Await(&csm)
+                    override this.GetNext() = 
+                        try 
+                            let next =  awaitable.GetNext()
+                            if next.IsCompletedSuccessfully then continuation() else
+                                awaitable <- next.awaitable
+                                Ply(await = this)
+                        with ex -> catch ex
+                })
+        with ex -> catch ex
+
+    let tryFinally (continuation : unit -> Ply<'u>) (finallyBody : unit -> unit) =
+        let inline withFinally f = 
+            try f()
+            with ex -> 
+                finallyBody()
+                throwPreserve ex
+
+        let next = withFinally continuation
+        if next.IsCompletedSuccessfully then 
+            finallyBody()
+            next 
+        else 
+            let mutable awaitable = next.awaitable
+            Ply(await = { new Awaitable<'u>() with 
+                override __.Await(csm) = awaitable.Await(&csm)
+                override this.GetNext() = 
+                    let next = withFinally awaitable.GetNext
+                    if next.IsCompletedSuccessfully then 
+                        finallyBody()
+                        next
+                    else
+                        awaitable <- next.awaitable
+                        Ply(await = this)
+            })
+
+    let using (disposable : #IDisposable) (body : #IDisposable -> Ply<'u>) =
+        tryFinally 
+            (fun () -> body disposable) 
+            (fun () -> if not (Object.ReferenceEquals(disposable, null)) then disposable.Dispose())
+
+    let forLoop (sequence : 'a seq) (body : 'a -> Ply<unit>) =
+        using (sequence.GetEnumerator()) (fun e -> whileLoop e.MoveNext (fun () -> body e.Current))
+
+    type [<Struct>]TaskAwaiterMethods<'t> = 
         interface IAwaiterMethods<TaskAwaiter<'t>, 't> with 
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult()
-    and [<IsReadOnly; Struct>]UnitTaskAwaiterMethods<'t> =
+    and [<Struct>]UnitTaskAwaiterMethods<'t> =
         interface IAwaiterMethods<TaskAwaiter, 't> with 
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult(); defaultof<_> // Always unit
 
-    and [<IsReadOnly; Struct>]ConfiguredTaskAwaiterMethods<'t> = 
+    and [<Struct>]ConfiguredTaskAwaiterMethods<'t> = 
         interface IAwaiterMethods<ConfiguredTaskAwaitable<'t>.ConfiguredTaskAwaiter, 't> with 
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult()
-    and [<IsReadOnly; Struct>]ConfiguredUnitTaskAwaiterMethods<'t> = 
+    and [<Struct>]ConfiguredUnitTaskAwaiterMethods<'t> = 
         interface IAwaiterMethods<ConfiguredTaskAwaitable.ConfiguredTaskAwaiter, 't> with 
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult(); defaultof<_> // Always unit
 
-    and [<IsReadOnly; Struct>]YieldAwaiterMethods<'t> = 
+    and [<Struct>]YieldAwaiterMethods<'t> = 
         interface IAwaiterMethods<YieldAwaitable.YieldAwaiter, 't> with 
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult(); defaultof<_> // Always unit
 
-    and [<IsReadOnly; Struct>]GenericAwaiterMethods<'awt, 't when 'awt :> ICriticalNotifyCompletion> = 
+    and [<Struct>]GenericAwaiterMethods<'awt, 't when 'awt :> ICriticalNotifyCompletion> = 
         interface IAwaiterMethods<'awt, 't> with 
             member __.IsCompleted awt = false // Always await, this way we don't have to specialize per awaiter
             member __.GetResult awt = defaultof<_> // Always unit because we wrap this continuation to always be unit -> Ply<'u>
@@ -248,11 +306,11 @@ module TplPrimitives =
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult(); defaultof<_> // Always unit
 
-    and [<Struct>]ConfiguredValueTaskAwaiterMethods<'t> =
+    and [<IsReadOnly; Struct>]ConfiguredValueTaskAwaiterMethods<'t> =
         interface IAwaiterMethods<ConfiguredValueTaskAwaitable<'t>.ConfiguredValueTaskAwaiter, 't> with 
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult()
-    and [<Struct>]ConfiguredUnitValueTaskAwaiterMethods<'t> = 
+    and [<IsReadOnly; Struct>]ConfiguredUnitValueTaskAwaiterMethods<'t> = 
         interface IAwaiterMethods<ConfiguredValueTaskAwaitable.ConfiguredValueTaskAwaiter, 't> with 
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult(); defaultof<_> // Always unit
@@ -314,45 +372,45 @@ module TplPrimitives =
         inherit Default1()
 
         static member inline Invoke (task, cont: 't -> Ply<'u>) = 
-            let inline call_2 (task: ^b, cont, a: ^a) = ((^a or ^b) : (static member T : _*_*_ -> Ply<'u>) task, cont, a)
+            let inline call_2 (task: ^b, cont, a: ^a) = ((^a or ^b) : (static member Bind : _*_*_ -> Ply<'u>) task, cont, a)
             let inline call (task: 'b, cont, a: 'a) = call_2 (task, cont, a)
             call(task, cont, defaultof<Bind>)
 
-        static member inline T(task: ^taskLike, cont: 't -> Ply<'u>, [<Optional>]_impl:Default2) = 
+        static member inline Bind(task: ^taskLike, cont: 't -> Ply<'u>, [<Optional>]_impl:Default2) = 
             Binder<'u>.Generic(task, cont)
 
-        static member inline T(task: Task, cont: unit -> Ply<'u>, [<Optional>]_impl:Default1) = 
+        static member inline Bind(task: Task, cont: unit -> Ply<'u>, [<Optional>]_impl:Default1) = 
             Binder<'u>.Specialized<UnitTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont)
 
-        static member inline T(task: Task<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
+        static member inline Bind(task: Task<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
             Binder<'u>.Specialized<TaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont)
      
-        static member inline T(task: ConfiguredTaskAwaitable<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
+        static member inline Bind(task: ConfiguredTaskAwaitable<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
             Binder<'u>.Specialized<ConfiguredTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont)
     
-        static member inline T(task: ConfiguredTaskAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) =
+        static member inline Bind(task: ConfiguredTaskAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) =
             Binder<'u>.Specialized<ConfiguredUnitTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
 
-        static member inline T(task: YieldAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) =
+        static member inline Bind(task: YieldAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) =
             Binder<'u>.Specialized<YieldAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
 
-        static member inline T(async: Async<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
+        static member inline Bind(async: Async<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
             Binder<'u>.Specialized<TaskAwaiterMethods<_>,_,_>((Async.StartAsTask async).GetAwaiter(), cont)
 
-        static member inline T(ply: Ply<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
+        static member inline Bind(ply: Ply<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
             Binder<'u>.Ply(ply, cont)
 
-        static member inline T(_: Id<'t>, _: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
+        static member inline Bind(_: Id<'t>, _: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
             failwith "Used for forcing delayed resolution."
 
 #if !NETSTANDARD2_0   
-        static member inline T(task: ValueTask<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
+        static member inline Bind(task: ValueTask<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
             Binder<'u>.Specialized<ValueTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
         
-        static member inline T(task: ValueTask, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) = 
+        static member inline Bind(task: ValueTask, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) = 
             Binder<'u>.Specialized<UnitValueTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
 
-        static member inline T(task: ConfiguredValueTaskAwaitable<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
+        static member inline Bind(task: ConfiguredValueTaskAwaitable<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
             Binder<'u>.Specialized<ConfiguredValueTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
 
         static member inline Bind(task: ConfiguredValueTaskAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) = 
@@ -360,12 +418,16 @@ module TplPrimitives =
 #endif
 
     type AwaitableBuilder() =
-        member inline __.Delay(f : unit -> Ply<'u>) = f
-        member inline __.Return(x)                  = ret x
-        member inline __.Zero()                     = zero
+        member inline __.Delay(body : unit -> Ply<'t>) = body
+        member inline __.Return(x)                     = ret x
+        member inline __.Zero()                        = zero
 
-        member inline __.ReturnFrom(task: ^taskLike)                         = Bind.Invoke(task, ret)
-        member inline __.Bind(task: ^taskLike, continuation: 't -> Ply<'u>)  = Bind.Invoke(task, continuation)
+        member inline __.ReturnFrom(task: ^taskLike)                        = Bind.Invoke(task, ret)
+        member inline __.Bind(task: ^taskLike, continuation: 't -> Ply<'u>) = Bind.Invoke(task, continuation)
 
-        member inline __.Combine(ts : Ply<unit>, continuation)                     = combine ts continuation
-        member inline __.While(condition : unit -> bool, body : unit -> Ply<unit>) = whileLoop condition body
+        member inline __.Combine(ply : Ply<unit>, continuation: unit -> Ply<'t>)          = combine ply continuation
+        member inline __.While(condition : unit -> bool, body : unit -> Ply<unit>)        = whileLoop condition body
+        member inline __.TryWith(body : unit -> Ply<'t>, catch : exn -> Ply<'t>)          = tryWith body catch
+        member inline __.TryFinally(body : unit -> Ply<'t>, finallyBody : unit -> unit)   = tryFinally body finallyBody
+        member inline __.Using(disposable : #IDisposable, body : #IDisposable -> Ply<'u>) = using disposable body
+        member inline __.For(sequence : seq<_>, body : _ -> Ply<unit>)                    = forLoop sequence body

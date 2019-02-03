@@ -29,18 +29,44 @@ module Builders =
         member inline __.Run(f : unit -> Ply<'u>) = run f
     
     let vtask = ValueTaskBuilder()
+#endif
 
-module AdvancedBuilders =
+module SpecializedBuilders =
+    type UnitTaskBuilder() =
+        inherit AwaitableBuilder()
+        member inline __.Run(f : unit -> Ply<'u>) = 
+            let t = run f
+#if NETSTANDARD2_0      
+            (run f) :> Task
+#else     
+            if t.IsCompletedSuccessfully then Task.CompletedTask else t.AsTask() :> Task
+#endif
+
+    let unitTask = UnitTaskBuilder()
+
+    type UnsafeUnitTaskBuilder() =
+        inherit AwaitableBuilder()
+        member inline __.Run(f : unit -> Ply<'u>) = 
+            let t = runUnwrapped f
+#if NETSTANDARD2_0      
+            (run f) :> Task
+#else     
+            if t.IsCompletedSuccessfully then Task.CompletedTask else t.AsTask() :> Task
+#endif
+
+    let uunitTask = UnsafeUnitTaskBuilder()
+
+#if !NETSTANDARD2_0
     type UnsafeValueTaskBuilder() =
         inherit AwaitableBuilder()
         member inline __.Run(f : unit -> Ply<'u>) = runUnwrapped f
 
     let uvtask = UnsafeValueTaskBuilder()
-
+    
+    
     type PlyBuilder() =
         inherit AwaitableBuilder()
         member inline __.Run(f : unit -> Ply<'u>) = f()
 
     let ply = PlyBuilder()
 #endif
-
