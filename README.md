@@ -30,10 +30,4 @@ Thanks to @gusty for very valuable SRTP advice, it helped me tremendously to nar
 Thanks to @rspeele TaskBuilder.fs was a great inspiration in developing Ply.
 
 ## Next Steps and Improvements
-- Complete the last few CE constructs
-    - For
-    - TryWith
-    - TryFinally
-    - Using
 - Finish up the experimental branch.
-- Pester @cartermp about struct computation expressions until F# has them ;) This is the last hurdle we need to overcome for Ply to be zero alloc per bind.
