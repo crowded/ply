@@ -77,26 +77,16 @@ module TplPrimitives =
             continuation = defaultof<_>
             next = ply
             inspect = true
-        }
+        }            
 
-        member private this.MoveNextCore() = 
-            let mutable fin = false
-            while not fin do
-                if this.inspect then
-                    let next = this.next
-                    if this.next.IsCompletedSuccessfully then
-                        fin <- true
-                        this.Builder.SetResult(this.next.value) 
-                    else 
-                        this.inspect <- false                         
-                        let yielded = next.awaitable.Await(&this)
-                        // MoveNext will be called again by the builder once await is done.
-                        if yielded then
-                            fin <- true
-                else
-                    this.inspect <- true
-                    this.next <- this.next.awaitable.GetNext()
-
+        member private this.GetNext() =
+            try
+                this.next <- this.continuation()
+                this.continuation <- defaultof<_>
+                (this :> IAsyncStateMachine).MoveNext()
+            with exn -> 
+                this.Builder.SetException(exn)
+                
         interface IAwaitingMachine with
             [<DebuggerStepThrough>]
             [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
@@ -109,13 +99,25 @@ module TplPrimitives =
                 this.Builder.SetStateMachine(csm)
             
             member this.MoveNext() =
+                if not (Object.ReferenceEquals(this.continuation, null)) then this.GetNext() else 
+                
                 try 
-                    if Object.ReferenceEquals(this.continuation, null) then 
-                        this.MoveNextCore()
-                    else 
-                        this.next <- this.continuation()
-                        this.continuation <- defaultof<_>
-                        this.MoveNextCore()
+                    let mutable fin = false
+                    while not fin do
+                        if this.inspect then
+                            let next = this.next
+                            if this.next.IsCompletedSuccessfully then
+                                fin <- true
+                                this.Builder.SetResult(this.next.value) 
+                            else 
+                                this.inspect <- false                         
+                                let yielded = next.awaitable.Await(&this)
+                                // MoveNext will be called again by the builder once await is done.
+                                if yielded then
+                                    fin <- true
+                        else
+                            this.inspect <- true
+                            this.next <- this.next.awaitable.GetNext()
                 with exn -> 
                     this.Builder.SetException(exn)
 
