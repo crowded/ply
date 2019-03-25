@@ -229,8 +229,8 @@ module TplPrimitives =
                     override __.Await(csm) = awaitable.Await(&csm)
                     override this.GetNext() = 
                         try 
-                            let next =  awaitable.GetNext()
-                            if next.IsCompletedSuccessfully then continuation() else
+                            let next = awaitable.GetNext()
+                            if next.IsCompletedSuccessfully then ret next.Result else
                                 awaitable <- next.awaitable
                                 Ply(await = this)
                         with ex -> catch ex
