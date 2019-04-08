@@ -79,11 +79,10 @@ module TplPrimitives =
             inspect = true
         }            
 
-        member private this.GetNext() =
+        member private this.UnsafeExecuteToFirstYield() =
             try
                 this.next <- this.continuation()
                 this.continuation <- defaultof<_>
-                (this :> IAsyncStateMachine).MoveNext()
             with exn -> 
                 this.Builder.SetException(exn)
                 
@@ -99,8 +98,8 @@ module TplPrimitives =
                 this.Builder.SetStateMachine(csm)
             
             member this.MoveNext() =
-                if not (Object.ReferenceEquals(this.continuation, null)) then this.GetNext() else 
-                
+                if not (Object.ReferenceEquals(this.continuation, null)) then this.UnsafeExecuteToFirstYield()
+                    
                 try 
                     let mutable fin = false
                     while not fin do
