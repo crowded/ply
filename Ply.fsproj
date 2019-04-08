@@ -10,7 +10,7 @@
     <NeutralLanguage>en-US</NeutralLanguage>
 
     <!-- Build settings -->
-    <TargetFrameworks>netcoreapp2.2; netstandard2.0</TargetFrameworks>
+    <TargetFrameworks>netcoreapp2.1; netstandard2.0</TargetFrameworks>
     <DebugType>portable</DebugType>
     <OutputType>Library</OutputType>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

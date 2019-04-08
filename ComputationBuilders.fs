@@ -23,15 +23,6 @@ module Builders =
 
     let task = TaskBuilder()
 
-#if !NETSTANDARD2_0
-    type ValueTaskBuilder() =
-        inherit AwaitableBuilder()
-        member inline __.Run(f : unit -> Ply<'u>) = run f
-    
-    let vtask = ValueTaskBuilder()
-#endif
-
-module SpecializedBuilders =
     type UnitTaskBuilder() =
         inherit AwaitableBuilder()
         member inline __.Run(f : unit -> Ply<'u>) = 
@@ -44,29 +35,53 @@ module SpecializedBuilders =
 
     let unitTask = UnitTaskBuilder()
 
-    type UnsafeUnitTaskBuilder() =
+#if !NETSTANDARD2_0
+    type ValueTaskBuilder() =
+        inherit AwaitableBuilder()
+        member inline __.Run(f : unit -> Ply<'u>) = run f
+    
+    let vtask = ValueTaskBuilder()
+
+    type UnitValueTaskBuilder() =
         inherit AwaitableBuilder()
         member inline __.Run(f : unit -> Ply<'u>) = 
-            let t = runUnwrapped f
-#if NETSTANDARD2_0      
-            (run f) :> Task
-#else     
-            if t.IsCompletedSuccessfully then Task.CompletedTask else t.AsTask() :> Task
+            let t = run f
+            if t.IsCompletedSuccessfully then ValueTask() else ValueTask(t.AsTask() :> Task)
+
+    let unitVtask = UnitValueTaskBuilder()
 #endif
 
-    let uunitTask = UnsafeUnitTaskBuilder()
+    module Unsafe = 
+        type UnsafePlyBuilder() =
+            inherit AwaitableBuilder()
+            member inline __.Run(f : unit -> Ply<'u>) = f()
+
+        let uply = UnsafePlyBuilder()
+
+        type UnsafeUnitTaskBuilder() =
+            inherit AwaitableBuilder()
+            member inline __.Run(f : unit -> Ply<'u>) = 
+                let t = runUnwrapped f
+#if NETSTANDARD2_0      
+                (run f) :> Task
+#else     
+                if t.IsCompletedSuccessfully then Task.CompletedTask else t.AsTask() :> Task
+#endif
+
+        let uunitTask = UnsafeUnitTaskBuilder()
 
 #if !NETSTANDARD2_0
-    type UnsafeValueTaskBuilder() =
-        inherit AwaitableBuilder()
-        member inline __.Run(f : unit -> Ply<'u>) = runUnwrapped f
+        type UnsafeValueTaskBuilder() =
+            inherit AwaitableBuilder()
+            member inline __.Run(f : unit -> Ply<'u>) = runUnwrapped f
 
-    let uvtask = UnsafeValueTaskBuilder()
-    
-    
-    type PlyBuilder() =
-        inherit AwaitableBuilder()
-        member inline __.Run(f : unit -> Ply<'u>) = f()
+        let uvtask = UnsafeValueTaskBuilder()
+        
+        type UnsafeUnitValueTaskBuilder() =
+            inherit AwaitableBuilder()
+            member inline __.Run(f : unit -> Ply<'u>) = 
+                let t = runUnwrapped f
+                if t.IsCompletedSuccessfully then ValueTask() else ValueTask(t.AsTask() :> Task)
 
-    let ply = PlyBuilder()
+        let uunitVtask = UnsafeUnitValueTaskBuilder()
 #endif
