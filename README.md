@@ -4,6 +4,7 @@ The goal of Ply is to be a very low overhead Task abstraction like it is in C#.
 
 ### Benchmark
 [see benchmark code](https://github.com/crowded/ply/blob/master/Benchmarks/Benchmarks.fs#L33)
+
 |                  Method |     Mean |     Error |    StdDev | Ratio | RatioSD | Gen 0/1k Op | Gen 1/1k Op | Gen 2/1k Op | Allocated Memory/Op |
 |------------------------ |---------:|----------:|----------:|------:|--------:|------------:|------------:|------------:|--------------------:|
 |          C# Async Await | 24.59 us | 0.8028 us | 0.8923 us |  1.00 |    0.00 |      0.2136 |           - |           - |
@@ -14,6 +15,7 @@ The goal of Ply is to be a very low overhead Task abstraction like it is in C#.
 
 ### Builders
 Ply comes bundled with these builders: 
+
 | builder          | return type   | tfm                           | namespace                            |
 |---------------|---------------|-------------------------------|--------------------------------------|
 | `task`        | Task<'T>      | netstandard2.0, netcoreapp2.1 | FSharp.Control.Tasks.Builders        |
@@ -27,6 +29,7 @@ Ply comes bundled with these builders:
 
 
 More information on when to use which builder:
+
 | builder         | description                                                                                                                                                                                                                  |
 |--------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `vtask`      | Near zero allocation CE, allocates one object for the [execution bubble](#execution-bubble) at the start, and two objects per bind if the Task we bind to isn't completed yet.                                                                         |
@@ -35,7 +38,8 @@ More information on when to use which builder:
 | `uvtask`     | An unsafe version of `vtask` and one of the few zero allocation* CEs Ply comes with. Read about the trade-off under [execution bubble](#execution-bubble)                                                                                           |
 | `uunitTask`  | An unsafe version of `unitTask` and one of the few zero allocation* CEs Ply comes with. Read about the trade-off under [execution bubble](#execution-bubble)                                                                                        |
 | `uunitVtask` | An unsafe version of `unitVtask` and one of the few zero allocation* CEs Ply comes with. Read about the trade-off under [execution bubble](#execution-bubble)                                                                                       |
-| `uply`       | Can be enqueued directly onto the caller's state machine, skips `Task` and safety wrapping.                                                                                                                                  |
+| `uply`       | Can be enqueued directly onto the caller's state machine, skips `Task` and [execution bubble](#execution-bubble).                                                                                                                                  |
+
 **zero allocation only when any Task (or Task-like) you bind against is already completed.*
 
 ### Execution bubble
