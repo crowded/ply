@@ -80,11 +80,8 @@ module TplPrimitives =
         }            
 
         member private this.UnsafeExecuteToFirstYield() =
-            try
-                this.next <- this.continuation()
-                this.continuation <- defaultof<_>
-            with exn -> 
-                this.Builder.SetException(exn)
+            this.next <- this.continuation()
+            this.continuation <- defaultof<_>
                 
         interface IAwaitingMachine with
             [<DebuggerStepThrough>]
@@ -97,10 +94,10 @@ module TplPrimitives =
             member this.SetStateMachine(csm) = 
                 this.Builder.SetStateMachine(csm)
             
-            member this.MoveNext() =
-                if not (Object.ReferenceEquals(this.continuation, null)) then this.UnsafeExecuteToFirstYield()
-                    
-                try 
+            member this.MoveNext() =                    
+                try
+                    if not (Object.ReferenceEquals(this.continuation, null)) then this.UnsafeExecuteToFirstYield()
+
                     let mutable fin = false
                     while not fin do
                         if this.inspect then
