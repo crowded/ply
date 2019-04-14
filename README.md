@@ -5,13 +5,13 @@ The goal of Ply is to be a very low overhead Task abstraction like it is in C#.
 ### Benchmark
 [see benchmark code](https://github.com/crowded/ply/blob/master/Benchmarks/Benchmarks.fs#L33)
 
-|                  Method |     Mean |     Error |    StdDev | Ratio | RatioSD | Gen 0/1k Op | Gen 1/1k Op | Gen 2/1k Op | Allocated Memory/Op |
-|------------------------ |---------:|----------:|----------:|------:|--------:|------------:|------------:|------------:|--------------------:|
+|                  Method |     Mean |     Error |    StdDev | Ratio | RatioSD | Gen 0/1k Op | Gen 1/1k Op | Gen 2/1k Op | 
+|------------------------ |---------:|----------:|----------:|------:|--------:|------------:|------------:|------------:|
 |          C# Async Await | 24.59 us | 0.8028 us | 0.8923 us |  1.00 |    0.00 |      0.2136 |           - |           - |
 |                     Ply | 24.60 us | 1.1610 us | 1.3371 us |  1.00 |    0.07 |      0.3052 |           - |           - |
 |   TaskBuilder.fs v2.1.0 | 26.86 us | 0.6751 us | 0.6932 us |  1.09 |    0.03 |      0.5798 |           - |           - |
 
-*Allocated Memory/Op is removed as it isn't correct on .NET Core.*
+*Allocated Memory/Op is removed as it isn't correct on .NET Core, Gen 0/1k Op is the relevant metric.*
 
 ### Builders
 Ply comes bundled with these builders: 
