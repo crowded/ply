@@ -3,7 +3,7 @@
   <PropertyGroup>
     <!-- General -->
     <AssemblyName>Ply</AssemblyName>
-    <Version>0.1.3</Version>
+    <Version>0.1.4</Version>
     <Description>A high performance TPL library for F#.</Description>
     <Copyright>Copyright 2019 Crowded B.V.</Copyright>
     <Authors>Nino Floris and contributors</Authors>
