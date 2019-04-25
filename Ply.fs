@@ -48,6 +48,9 @@ module TplPrimitives =
 
     let inline defaultof<'T> = Unchecked.defaultof<'T>
 
+    let inline isNull x = Object.ReferenceEquals(x, null)
+    let inline isNotNull x = not (isNull x)
+    
     let inline throwPreserve ex = 
         (ExceptionDispatchInfo.Capture ex).Throw()
         Unchecked.defaultof<_>
@@ -95,8 +98,9 @@ module TplPrimitives =
                 this.Builder.SetStateMachine(csm)
             
             member this.MoveNext() =                    
+                let mutable ex = defaultof<Exception>
                 try
-                    if not (Object.ReferenceEquals(this.continuation, null)) then this.UnsafeExecuteToFirstYield()
+                    if isNotNull this.continuation then this.UnsafeExecuteToFirstYield()
 
                     let mutable fin = false
                     while not fin do
@@ -114,8 +118,11 @@ module TplPrimitives =
                         else
                             this.inspect <- true
                             this.next <- this.next.awaitable.GetNext()
-                with exn -> 
-                    this.Builder.SetException(exn)
+                with exn ->
+                    ex <- exn 
+                
+                if isNotNull ex then 
+                    this.Builder.SetException(ex)
 
     and [<Sealed>] TplAwaitable<'methods, 'awt, 't, 'u when 'methods :> IAwaiterMethods<'awt, 't> and 'awt :> ICriticalNotifyCompletion> =
         inherit Awaitable<'u>
@@ -148,22 +155,34 @@ module TplPrimitives =
         override __.Await(csm) = awaitable.Await(&csm)
 
         override this.GetNext() = 
-            let next =  awaitable.GetNext()
-            if next.IsCompletedSuccessfully then continuation (next.value) else
+            let next = awaitable.GetNext()
+            if next.IsCompletedSuccessfully then
+                continuation (next.value)
+            else
                 awaitable <- next.awaitable
                 Ply(await = this)
 
-    and [<Sealed>] ReusableSideEffectingAwaitable<'u> (awaitable: Awaitable<unit>, continuation: unit -> Ply<'u>) = 
-        inherit Awaitable<'u>()
-        let mutable awaitable = awaitable
+    and [<Sealed>] LoopAwaitable(initialAwaitable : Awaitable<unit>, cond: unit -> bool, body : unit -> Ply<unit>) = 
+        inherit Awaitable<unit>()
+        let mutable awaitable : Awaitable<unit> = initialAwaitable
 
-        member internal __.Reset(aw) = awaitable <- aw 
-
+        member private this.RepeatBody() =
+            if cond() then
+                let next = body()
+                if next.IsCompletedSuccessfully then 
+                    this.RepeatBody()
+                else
+                    awaitable <- next.awaitable
+                    Ply(await = this)
+            else zero
+            
         override __.Await(csm) = awaitable.Await(&csm)
 
         override this.GetNext() =
-            let next =  awaitable.GetNext()
-            if next.IsCompletedSuccessfully then continuation() else
+            let next = awaitable.GetNext()
+            if next.IsCompletedSuccessfully then
+                this.RepeatBody()
+            else
                 awaitable <- next.awaitable
                 Ply(await = this)
 
@@ -194,28 +213,18 @@ module TplPrimitives =
         if ply.IsCompletedSuccessfully then 
             continuation() 
         else 
-            Ply(await = ReusableSideEffectingAwaitable(ply.awaitable, continuation))
+            Ply(await = PlyAwaitable<unit, 'b>(ply.awaitable, continuation))
 
-    let whileLoop (cond : unit -> bool) (body : unit -> Ply<unit>) =
+    let rec whileLoop (cond : unit -> bool) (body : unit -> Ply<unit>) =
+        // As long as we never yield loops are allocation free
         if cond() then
-            let mutable awaitable: ReusableSideEffectingAwaitable<unit> = defaultof<_>
-            let rec repeat () =
-                if cond() then
-                    let next = body()
-                    if next.IsCompletedSuccessfully then 
-                        repeat()
-                    else 
-                        awaitable.Reset(next.awaitable)
-                        Ply(await = awaitable)
-                else zero
             let next = body()
             if next.IsCompletedSuccessfully then 
-                awaitable <- ReusableSideEffectingAwaitable(defaultof<_>, repeat)
-                repeat() 
-            else 
-                Ply(await = ReusableSideEffectingAwaitable(next.awaitable, repeat))
+                whileLoop cond body
+            else
+                Ply(await = LoopAwaitable(next.awaitable, cond, body))
         else zero
-
+ 
     let tryWith(continuation : unit -> Ply<'u>) (catch : exn -> Ply<'u>) =
         try
             let next = continuation()
@@ -261,7 +270,7 @@ module TplPrimitives =
     let using (disposable : #IDisposable) (body : #IDisposable -> Ply<'u>) =
         tryFinally 
             (fun () -> body disposable) 
-            (fun () -> if not (Object.ReferenceEquals(disposable, null)) then disposable.Dispose())
+            (fun () -> if isNotNull disposable then disposable.Dispose())
 
     let forLoop (sequence : 'a seq) (body : 'a -> Ply<unit>) =
         using (sequence.GetEnumerator()) (fun e -> whileLoop e.MoveNext (fun () -> body e.Current))
