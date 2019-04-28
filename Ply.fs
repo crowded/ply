@@ -186,13 +186,14 @@ module TplPrimitives =
                 awaitable <- next.awaitable
                 Ply(await = this)
 
-    let run (f: unit -> Ply<'u>) =
+#if !NETSTANDARD2_0
+    let run (f: unit -> Ply<'u>) : ValueTask<'u> =
         // ContinuationStateMachine contains a mutable struct so we need to prevent struct copies.
         let mutable x = ContinuationStateMachine<_>(f)
         x.Builder.Start(&x)
         x.Builder.Task
 
-    let runPly (ply: Ply<'u>) =
+    let runPly (ply: Ply<'u>) : ValueTask<'u>  =
         let mutable x = ContinuationStateMachine<_>(ply)
         x.Builder.Start(&x)
         x.Builder.Task
@@ -200,7 +201,7 @@ module TplPrimitives =
     // This won't correctly prevent AsyncLocal leakage or SyncContext switches but it does save us the closure alloc
     // Making only this version completely alloc free for the fast path...
     // Read more here https://github.com/dotnet/coreclr/blob/027a9105/src/System.Private.CoreLib/src/System/Runtime/CompilerServices/AsyncMethodBuilder.cs#L954
-    let inline runUnwrapped (f: unit -> Ply<'u>) =
+    let inline runUnwrapped (f: unit -> Ply<'u>) : ValueTask<'u>  =
         let next = f()
         if next.IsCompletedSuccessfully then 
             let mutable b = createBuilder()
@@ -208,6 +209,42 @@ module TplPrimitives =
             b.Task
         else 
             runPly next
+#endif
+
+    let runAsTask (f: unit -> Ply<'u>) : Task<'u> =
+        // ContinuationStateMachine contains a mutable struct so we need to prevent struct copies.
+        let mutable x = ContinuationStateMachine<_>(f)
+        x.Builder.Start(&x)
+#if NETSTANDARD2_0
+        x.Builder.Task
+#else
+        x.Builder.Task.AsTask()
+#endif
+
+    let runPlyAsTask (ply: Ply<'u>) : Task<'u>  =
+        let mutable x = ContinuationStateMachine<_>(ply)
+        x.Builder.Start(&x)
+#if NETSTANDARD2_0
+        x.Builder.Task
+#else
+        x.Builder.Task.AsTask()
+#endif
+
+    // This won't correctly prevent AsyncLocal leakage or SyncContext switches but it does save us the closure alloc
+    // Making only this version completely alloc free for the fast path...
+    // Read more here https://github.com/dotnet/coreclr/blob/027a9105/src/System.Private.CoreLib/src/System/Runtime/CompilerServices/AsyncMethodBuilder.cs#L954
+    let inline runUnwrappedAsTask (f: unit -> Ply<'u>) : Task<'u> =
+        let next = f()
+        if next.IsCompletedSuccessfully then 
+            let mutable b = createBuilder()
+            b.SetResult(next.Result)
+#if NETSTANDARD2_0
+            b.Task
+#else
+            b.Task.AsTask()
+#endif
+        else 
+            runPlyAsTask next
 
     let combine (ply : Ply<unit>) (continuation : unit -> Ply<'b>) =
         if ply.IsCompletedSuccessfully then 

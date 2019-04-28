@@ -14,22 +14,17 @@ open System.Threading.Tasks
 module Builders = 
     type TaskBuilder() =
         inherit AwaitableBuilder()
-        member inline __.Run(f : unit -> Ply<'u>) : Task<'u> = 
-#if NETSTANDARD2_0      
-            run f
-#else     
-            (run f).AsTask()
-#endif
+        member inline __.Run(f : unit -> Ply<'u>) : Task<'u> = runAsTask f
 
     let task = TaskBuilder()
 
     type UnitTaskBuilder() =
         inherit AwaitableBuilder()
         member inline __.Run(f : unit -> Ply<'u>) = 
-            let t = run f
 #if NETSTANDARD2_0      
-            (run f) :> Task
+            (runAsTask f) :> Task
 #else     
+            let t = run f
             if t.IsCompletedSuccessfully then Task.CompletedTask else t.AsTask() :> Task
 #endif
 
@@ -61,10 +56,10 @@ module Builders =
         type UnsafeUnitTaskBuilder() =
             inherit AwaitableBuilder()
             member inline __.Run(f : unit -> Ply<'u>) = 
-                let t = runUnwrapped f
 #if NETSTANDARD2_0      
-                (run f) :> Task
+                (runUnwrappedAsTask f) :> Task
 #else     
+                let t = runUnwrapped f
                 if t.IsCompletedSuccessfully then Task.CompletedTask else t.AsTask() :> Task
 #endif
 
