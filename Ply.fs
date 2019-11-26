@@ -279,17 +279,19 @@ module TplPrimitives =
                 })
         with ex -> catch ex
 
-    let tryFinally (continuation : unit -> Ply<'u>) (finallyBody : unit -> unit) =
+    let tryFinally (continuation : unit -> Ply<'u>) (finallyBody : unit -> Ply<unit>) =
         let inline withFinally f = 
             try f()
             with ex -> 
-                finallyBody()
-                throwPreserve ex
+                let fin = finallyBody()
+                if fin.IsCompletedSuccessfully then throwPreserve ex else
+                    Ply(await = PlyAwaitable<unit, 'u>(fin.awaitable, fun() -> throwPreserve ex))
 
         let next = withFinally continuation
-        if next.IsCompletedSuccessfully then 
-            finallyBody()
-            next 
+        if next.IsCompletedSuccessfully then
+            let fin = finallyBody()
+            if fin.IsCompletedSuccessfully then next else
+                Ply(await = PlyAwaitable<unit, 'u>(fin.awaitable, fun() -> next))
         else 
             let mutable awaitable = next.awaitable
             Ply(await = { new Awaitable<'u>() with 
@@ -297,8 +299,9 @@ module TplPrimitives =
                 override this.GetNext() = 
                     let next = withFinally awaitable.GetNext
                     if next.IsCompletedSuccessfully then 
-                        finallyBody()
-                        next
+                        let fin = finallyBody()
+                        if fin.IsCompletedSuccessfully then next else
+                            Ply(await = PlyAwaitable<unit, 'u>(fin.awaitable, fun() -> next))
                     else
                         awaitable <- next.awaitable
                         Ply(await = this)
@@ -307,7 +310,9 @@ module TplPrimitives =
     let using (disposable : #IDisposable) (body : #IDisposable -> Ply<'u>) =
         tryFinally 
             (fun () -> body disposable) 
-            (fun () -> if isNotNull disposable then disposable.Dispose())
+            (fun () ->
+                if isNotNull disposable then disposable.Dispose()
+                zero)
 
     let forLoop (sequence : 'a seq) (body : 'a -> Ply<unit>) =
         using (sequence.GetEnumerator()) (fun e -> whileLoop e.MoveNext (fun () -> body e.Current))
@@ -472,6 +477,6 @@ module TplPrimitives =
         member inline __.Combine(ply : Ply<unit>, continuation: unit -> Ply<'t>)          = combine ply continuation
         member inline __.While(condition : unit -> bool, body : unit -> Ply<unit>)        = whileLoop condition body
         member inline __.TryWith(body : unit -> Ply<'t>, catch : exn -> Ply<'t>)          = tryWith body catch
-        member inline __.TryFinally(body : unit -> Ply<'t>, finallyBody : unit -> unit)   = tryFinally body finallyBody
+        member inline __.TryFinally(body : unit -> Ply<'t>, finallyBody : unit -> Ply<unit>)   = tryFinally body finallyBody
         member inline __.Using(disposable : #IDisposable, body : #IDisposable -> Ply<'u>) = using disposable body
         member inline __.For(sequence : seq<_>, body : _ -> Ply<unit>)                    = forLoop sequence body
