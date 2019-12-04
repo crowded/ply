@@ -25,6 +25,7 @@
     <PackageProjectUrl>https://github.com/crowded/ply</PackageProjectUrl>
     <PackageReleaseNotes>https://raw.githubusercontent.com/crowded/ply/master/RELEASE_NOTES.md</PackageReleaseNotes>
     <PackageIconUrl>https://raw.githubusercontent.com/crowded/ply/master/tools/icons/ply-128x128.png</PackageIconUrl>
+    <PackageIcon>ply-128x128.png</PackageIcon>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
     
@@ -40,8 +41,16 @@
   </PropertyGroup>
   
   <ItemGroup>
+    <PackageReference Update="FSharp.Core" Version="4.7.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Include="Ply.fs" />
     <Compile Include="ComputationBuilders.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="tools\icons\ply-128x128.png" Pack="true" PackagePath="\"/>
   </ItemGroup>
 
 </Project>
