@@ -9,24 +9,32 @@ open FSharp.Control.Tasks.Builders.Unsafe // Ply
 [<MemoryDiagnoser>]
 [<SimpleJob(targetCount = 10)>]
 type MicroBenchmark() =
-    static let [<Literal>] InnerLoopCount = 100000  
-    static let innerLoopCount = InnerLoopCount
-    static let oldTask = ContextSensitive.task
-
     [<Benchmark(OperationsPerInvoke = 100000)>]
-    member __.AllocFreeReturn() = 
-        for i = 0 to innerLoopCount do
-            let ret (x : 'a) =
-                uvtask {
-                    return! uply {
-                        return! uvtask {
-                            return! uply {
-                                return 1                  
-                            } 
-                        }                         
-                    } 
+    member _.AllocFreeReturn() = 
+        for _ = 0 to 100000 do
+            let ret () =
+                uply {
+                    return! uvtask {
+                        return! uply {
+                            return 1                  
+                        } 
+                    }
                 }
-            ret 1 |> ignore
+            ret() |> ignore
+
+    [<Benchmark(OperationsPerInvoke = 1000)>]
+    member _.SyncExceptionSuspend() = 
+        for _ = 0 to 1000 do
+            let ret () =
+                uply {
+                    return! uvtask {
+                        return! uply {
+                            invalidOp "Will be suspended in an awaitable"
+                            return ()                                 
+                        } 
+                    }
+                }
+            ret() |> ignore
 
 [<MemoryDiagnoser>]
 [<SimpleJob(targetCount = 20)>]
@@ -41,7 +49,7 @@ type TaskBuildersBenchmark() =
     let loopCount = 5
 
     [<Benchmark(Description = "Ply")>]
-    member __.TaskBuilderOpt () =
+    member _.TaskBuilderOpt () =
         (task {
             do! Task.Yield()
             let! arb = Task.Run(arbitraryWork workFactor)
@@ -58,24 +66,24 @@ type TaskBuildersBenchmark() =
             if v > 0 then return! ValueTask<_>(v) else return 0
         }).Result
 
-    // [<Benchmark(Description = "TaskBuilder.fs v2.1.0")>]
-    // member __.TaskBuilder () =  
-    //     (oldTask {
-    //         do! Task.Yield()
-    //         let! arb = Task.Run(arbitraryWork workFactor)
-    //         let! v = oldTask {
-    //             return! ValueTask<_>(arb)
-    //         }
+    [<Benchmark(Description = "TaskBuilder.fs v2.1.0")>]
+    member _.TaskBuilder () =  
+        (oldTask {
+            do! Task.Yield()
+            let! arb = Task.Run(arbitraryWork workFactor)
+            let! v = oldTask {
+                return! ValueTask<_>(arb)
+            }
 
-    //         let mutable i = loopCount
-    //         while i > 0 do 
-    //             let! y = Task.Run(arbitraryWork workFactor).ConfigureAwait(false)
-    //             i <- i - 1 
-    //             return ()
+            let mutable i = loopCount
+            while i > 0 do 
+                let! y = Task.Run(arbitraryWork workFactor).ConfigureAwait(false)
+                i <- i - 1 
+                return ()
 
-    //         if v > 0 then return! ValueTask<_>(v) else return 0
-    //     }).Result
+            if v > 0 then return! ValueTask<_>(v) else return 0
+        }).Result
 
     [<Benchmark(Description = "C# Async Await", Baseline = true)>]
-    member __.CSAsyncAwait () =  
+    member _.CSAsyncAwait () =  
         CS.Benchmarks.CsTasks(workFactor, loopCount).Result

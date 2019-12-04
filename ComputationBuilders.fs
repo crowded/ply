@@ -49,7 +49,7 @@ module Builders =
     module Unsafe = 
         type UnsafePlyBuilder() =
             inherit AwaitableBuilder()
-            member inline __.Run(f : unit -> Ply<'u>) = f()
+            member inline __.Run(f : unit -> Ply<'u>) = runUnwrappedAsPly f
 
         let uply = UnsafePlyBuilder()
 

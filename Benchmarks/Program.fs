@@ -1,7 +1,11 @@
+module Ply.Benchmarks
+
 open System.Reflection
 open BenchmarkDotNet.Running
 
-type private This = class end
+type private This =
+    class
+    end
 
 [<EntryPoint>]
 let main argv =

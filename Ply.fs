@@ -50,11 +50,7 @@ module TplPrimitives =
 
     let inline isNull x = Object.ReferenceEquals(x, null)
     let inline isNotNull x = not (isNull x)
-    
-    let inline throwPreserve ex = 
-        (ExceptionDispatchInfo.Capture ex).Throw()
-        Unchecked.defaultof<_>
-
+ 
     let ret x = Ply(result = x)
     let zero = ret ()
 
@@ -82,7 +78,7 @@ module TplPrimitives =
             inspect = true
         }            
 
-        member private this.UnsafeExecuteToFirstYield() =
+        member private this.RunContinuation() =
             this.next <- this.continuation()
             this.continuation <- defaultof<_>
                 
@@ -100,7 +96,7 @@ module TplPrimitives =
             member this.MoveNext() =                    
                 let mutable ex = defaultof<Exception>
                 try
-                    if isNotNull this.continuation then this.UnsafeExecuteToFirstYield()
+                    if isNotNull this.continuation then this.RunContinuation()
 
                     let mutable fin = false
                     while not fin do
@@ -186,6 +182,21 @@ module TplPrimitives =
                 awaitable <- next.awaitable
                 Ply(await = this)
 
+    // Not inlined to protect implementation details
+    let ediPly (edi: ExceptionDispatchInfo) = 
+        Ply(await = { new Awaitable<'u>() with 
+                    override __.Await(_) = false
+                    override __.GetNext() = 
+                        edi.Throw()
+                        defaultof<_>
+                })
+
+    // Runs any continuation directly, without any execution context capture, but still suspending any exceptions.
+    // Exceptions outside a builder can happen here during Bind when an awaiter is completed but GetResult throws.
+    let inline runUnwrappedAsPly (f: unit -> Ply<'u>) : Ply<'u> = 
+        try f()
+        with ex -> ediPly (ExceptionDispatchInfo.Capture ex)
+
 #if !NETSTANDARD2_0
     let run (f: unit -> Ply<'u>) : ValueTask<'u> =
         // ContinuationStateMachine contains a mutable struct so we need to prevent struct copies.
@@ -202,7 +213,7 @@ module TplPrimitives =
     // Making only this version completely alloc free for the fast path...
     // Read more here https://github.com/dotnet/coreclr/blob/027a9105/src/System.Private.CoreLib/src/System/Runtime/CompilerServices/AsyncMethodBuilder.cs#L954
     let inline runUnwrapped (f: unit -> Ply<'u>) : ValueTask<'u>  =
-        let next = f()
+        let next = runUnwrappedAsPly f
         if next.IsCompletedSuccessfully then 
             let mutable b = createBuilder()
             b.SetResult(next.Result)
@@ -234,7 +245,7 @@ module TplPrimitives =
     // Making only this version completely alloc free for the fast path...
     // Read more here https://github.com/dotnet/coreclr/blob/027a9105/src/System.Private.CoreLib/src/System/Runtime/CompilerServices/AsyncMethodBuilder.cs#L954
     let inline runUnwrappedAsTask (f: unit -> Ply<'u>) : Task<'u> =
-        let next = f()
+        let next = runUnwrappedAsPly f
         if next.IsCompletedSuccessfully then 
             let mutable b = createBuilder()
             b.SetResult(next.Result)
@@ -282,9 +293,9 @@ module TplPrimitives =
     let tryFinally (continuation : unit -> Ply<'u>) (finallyBody : unit -> unit) =
         let inline withFinally f = 
             try f()
-            with ex -> 
+            with _ -> 
                 finallyBody()
-                throwPreserve ex
+                reraise()
 
         let next = withFinally continuation
         if next.IsCompletedSuccessfully then 
