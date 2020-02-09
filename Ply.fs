@@ -54,6 +54,8 @@ module TplPrimitives =
     let ret x = Ply(result = x)
     let zero = ret ()
 
+    let forceThrowEx = "|PlyForceThrowEx|"
+
     type [<Struct>]ContinuationStateMachine<'u> = 
 #if NETSTANDARD2_0        
         val Builder : AsyncTaskMethodBuilder<'u> 
@@ -286,14 +288,35 @@ module TplPrimitives =
                             if next.IsCompletedSuccessfully then next else
                                 awaitable <- next.awaitable
                                 Ply(await = this)
-                        with ex -> catch ex
+                        with ex ->
+                            let edi = ExceptionDispatchInfo.Capture(ex)
+                            try catch ex
+                            // 'Fix' for https://github.com/dotnet/fsharp/issues/8529 hopefully this can soon be removed.
+                            // It is much less common for user code to raise the same exception again with the intent of obscuring traces
+                            // than it is to have exception filters where it's expected the trace stays intact if it doesn't match any filter.
+                            // Yet we have no way of discriminating correct user code doing `raise ex` from the incorrect compiler generated call.
+                            // Therefore we also examine ex.Data[forceThrowEx] to opt out of our own incorrect (but preferable) behavior.
+                            with catchEx when obj.ReferenceEquals(catchEx, ex) && not <| ex.Data.Contains(forceThrowEx) ->
+                                edi.Throw()
+                                defaultof<_>
                 })
-        with ex -> catch ex
+        with ex ->
+            let edi = ExceptionDispatchInfo.Capture(ex)
+            try catch ex
+            // 'Fix' for https://github.com/dotnet/fsharp/issues/8529 hopefully this can soon be removed.
+            // It is much less common for user code to raise the same exception again with the intent of obscuring traces
+            // than it is to have exception filters where it's expected the trace stays intact if it doesn't match any filter.
+            // Yet we have no way of discriminating correct user code doing `raise ex` from the incorrect compiler generated call.
+            // Therefore we also examine ex.Data[forceThrowEx] to opt out of our own incorrect (but preferable) behavior.
+            with catchEx when obj.ReferenceEquals(catchEx, ex) && not <| ex.Data.Contains(forceThrowEx) ->
+                edi.Throw()
+                defaultof<_>
+
 
     let tryFinally (continuation : unit -> Ply<'u>) (finallyBody : unit -> unit) =
         let inline withFinally f = 
             try f()
-            with _ -> 
+            with ex -> 
                 finallyBody()
                 reraise()
 
