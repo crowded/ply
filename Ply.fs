@@ -56,9 +56,12 @@ module TplPrimitives =
 
     let forceThrowEx = "|PlyForceThrowEx|"
 
-    type [<Struct>]ContinuationStateMachine<'u> = 
-#if NETSTANDARD2_0        
-        val Builder : AsyncTaskMethodBuilder<'u> 
+    type TplResult<'t> = Result<'t, ExceptionDispatchInfo>
+
+    // https://github.com/dotnet/coreclr/pull/15781/files
+    type [<Struct;CompilerGenerated>]ContinuationStateMachine<'u> =
+#if NETSTANDARD2_0
+        val Builder : AsyncTaskMethodBuilder<'u>
 #else
         val Builder : AsyncValueTaskMethodBuilder<'u> 
 #endif
@@ -127,7 +130,7 @@ module TplPrimitives =
         
         val private awaiterMethods: 'methods
         val mutable private awaiter: 'awt
-        val private continuation: 't -> Ply<'u>
+        val private continuation: TplResult<'t> -> Ply<'u>
         
         new(awaiterMethods, awaiter, continuation) = {
             awaiterMethods = awaiterMethods
@@ -144,9 +147,16 @@ module TplPrimitives =
 
         override this.GetNext() = 
             Debug.Assert(this.awaiterMethods.IsCompleted &this.awaiter || (typeof<'awt> = typeof<YieldAwaitable.YieldAwaiter>), "Forcing an async here")
-            this.continuation (this.awaiterMethods.GetResult &this.awaiter)
 
-    and [<Sealed>] PlyAwaitable<'t, 'u> (awaitable: Awaitable<'t>, continuation: 't -> Ply<'u>) = 
+            let result =
+                try
+                    Ok(this.awaiterMethods.GetResult &this.awaiter)
+                with ex ->
+                    Error(ExceptionDispatchInfo.Capture(ex))
+
+            this.continuation result
+
+    and [<Sealed>] PlyAwaitable<'t, 'u> (awaitable: Awaitable<'t>, continuation: 't -> Ply<'u>) =
         inherit Awaitable<'u>()
         let mutable awaitable = awaitable
 
@@ -404,8 +414,12 @@ module TplPrimitives =
         // Secondly, for every GetResult — because all calls to bind overloads are wrapped by TaskBuilder.Run — we are
         // already running within our own Excecution context bubble. No need to be careful calling GetResult. 
 
+        // Await exists for binary compatibility.
+        static member Await<'methods, 'awt, 't when 'methods :> IAwaiterMethods<'awt, 't>>(awt: byref<'awt>, cont: 't -> Ply<'u>) =
+            Ply(await = TplAwaitable(defaultof<'methods>, awt, fun r -> match r with Ok t -> cont t | Error e -> e.Throw(); defaultof<_>))
+
         // We keep Await non inline to protect internals to maximize binary compatibility.
-        static member Await<'methods, 'awt, 't when 'methods :> IAwaiterMethods<'awt, 't>>(awt: byref<'awt>, cont: 't -> Ply<'u>) = 
+        static member AwaitResult<'methods, 'awt, 't when 'methods :> IAwaiterMethods<'awt, 't>>(awt: byref<'awt>, cont: TplResult<'t> -> Ply<'u>) =
             Ply(await = TplAwaitable(defaultof<'methods>, awt, cont))
 
         static member inline Specialized<'methods, ^awt, 't 
@@ -418,7 +432,8 @@ module TplPrimitives =
                 cont (^awt : (member GetResult: unit -> 't) (awt))
             else
                 let mutable mutAwt = awt
-                Binder<'u>.Await<'methods,_,_>(&mutAwt, (fun x -> cont x))
+                // Having the edi.Throw here means user stack frames will get captured, as this code will get inlined into cont.
+                Binder<'u>.AwaitResult<'methods,_,_>(&mutAwt, (fun r -> match r with Ok t -> cont t | Error e -> e.Throw(); defaultof<_>))
 
         // We have special treatment for unknown taskLike types where we wrap the continuation in a unit func
         // This allows us to use a single GenericAwaiterMethods type (zero alloc, small drop in perf) instead of an object expression.
