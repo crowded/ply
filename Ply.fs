@@ -3,6 +3,18 @@
 // Copyright (c) 2019 Crowded B.V.
 // Distributed under the MIT License (https://opensource.org/licenses/MIT).
 
+#if NETSTANDARD2_0
+namespace System.Runtime.CompilerServices
+
+    open System
+    open System.Runtime.CompilerServices
+    open System.Runtime.InteropServices
+    [<AttributeUsage(AttributeTargets.All,AllowMultiple=false)>]
+    [<Sealed>]
+    type IsReadOnlyAttribute() =
+        inherit System.Attribute()
+#endif
+
 namespace rec Ply
 open System
 open System.Runtime.CompilerServices
@@ -18,11 +30,7 @@ module Internal =
     and IAwaitingMachine = 
         abstract member AwaitUnsafeOnCompleted<'awt when 'awt :> ICriticalNotifyCompletion> : awt: byref<'awt> -> unit
 
-#if NETSTANDARD2_0 
-type [<Struct>] Ply<'u> =
-#else 
 type [<IsReadOnly; Struct>] Ply<'u> =
-#endif
     val internal value : 'u
     val internal awaitable : Internal.Awaitable<'u> 
     new(result: 'u) = { value = result; awaitable = null }
@@ -30,7 +38,7 @@ type [<IsReadOnly; Struct>] Ply<'u> =
     member this.IsCompletedSuccessfully = Object.ReferenceEquals(this.awaitable, null)
     member this.Result = if this.IsCompletedSuccessfully then this.value else this.awaitable.GetNext().Result
 
-[<System.Obsolete>]
+[<System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)>]
 /// Entrypoint for generated code
 module TplPrimitives =
     open Internal
@@ -40,11 +48,7 @@ module TplPrimitives =
         abstract member GetResult: byref<'awt> -> 'res
 
     let inline createBuilder() = 
-#if NETSTANDARD2_0
-        AsyncTaskMethodBuilder<_>()
-#else    
         AsyncValueTaskMethodBuilder<_>()
-#endif   
 
     let inline defaultof<'T> = Unchecked.defaultof<'T>
 
@@ -60,11 +64,7 @@ module TplPrimitives =
 
     // https://github.com/dotnet/coreclr/pull/15781/files
     type [<Struct;CompilerGenerated>]ContinuationStateMachine<'u> =
-#if NETSTANDARD2_0
-        val Builder : AsyncTaskMethodBuilder<'u>
-#else
         val Builder : AsyncValueTaskMethodBuilder<'u> 
-#endif
         val mutable private next: Ply<'u>
         val mutable private inspect: bool
         val mutable private continuation: unit -> Ply<'u>
@@ -209,7 +209,6 @@ module TplPrimitives =
         try f()
         with ex -> ediPly (ExceptionDispatchInfo.Capture ex)
 
-#if !NETSTANDARD2_0
     let run (f: unit -> Ply<'u>) : ValueTask<'u> =
         // ContinuationStateMachine contains a mutable struct so we need to prevent struct copies.
         let mutable x = ContinuationStateMachine<_>(f)
@@ -232,26 +231,17 @@ module TplPrimitives =
             b.Task
         else 
             runPly next
-#endif
 
     let runAsTask (f: unit -> Ply<'u>) : Task<'u> =
         // ContinuationStateMachine contains a mutable struct so we need to prevent struct copies.
         let mutable x = ContinuationStateMachine<_>(f)
         x.Builder.Start(&x)
-#if NETSTANDARD2_0
-        x.Builder.Task
-#else
         x.Builder.Task.AsTask()
-#endif
 
     let runPlyAsTask (ply: Ply<'u>) : Task<'u>  =
         let mutable x = ContinuationStateMachine<_>(ply)
         x.Builder.Start(&x)
-#if NETSTANDARD2_0
-        x.Builder.Task
-#else
         x.Builder.Task.AsTask()
-#endif
 
     // This won't correctly prevent AsyncLocal leakage or SyncContext switches but it does save us the closure alloc
     // Making only this version completely alloc free for the fast path...
@@ -261,11 +251,7 @@ module TplPrimitives =
         if next.IsCompletedSuccessfully then 
             let mutable b = createBuilder()
             b.SetResult(next.Result)
-#if NETSTANDARD2_0
-            b.Task
-#else
             b.Task.AsTask()
-#endif
         else 
             runPlyAsTask next
 
@@ -384,7 +370,6 @@ module TplPrimitives =
             member __.IsCompleted awt = false // Always await, this way we don't have to specialize per awaiter
             member __.GetResult awt = defaultof<_> // Always unit because we wrap this continuation to always be unit -> Ply<'u>
 
-#if !NETSTANDARD2_0        
     and [<IsReadOnly; Struct>]ValueTaskAwaiterMethods<'t> =
         interface IAwaiterMethods<ValueTaskAwaiter<'t>, 't> with 
             member __.IsCompleted awt = awt.IsCompleted
@@ -402,7 +387,6 @@ module TplPrimitives =
         interface IAwaiterMethods<ConfiguredValueTaskAwaitable.ConfiguredValueTaskAwaiter, 't> with 
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult(); defaultof<_> // Always unit
-#endif
 
     type Binder<'u>() =
         // Each Bind method here has an extraneous fun x -> cont x in its body for optimization purposes.
@@ -496,7 +480,6 @@ module TplPrimitives =
         static member inline Bind(_: Id<'t>, _: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
             failwith "Used for forcing delayed resolution."
 
-#if !NETSTANDARD2_0   
         static member inline Bind(task: ValueTask<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
             Binder<'u>.Specialized<ValueTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
         
@@ -508,7 +491,6 @@ module TplPrimitives =
 
         static member inline Bind(task: ConfiguredValueTaskAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) = 
             Binder<'u>.Specialized<ConfiguredUnitValueTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
-#endif
 
     type AwaitableBuilder() =
         member inline __.Delay(body : unit -> Ply<'t>) = body

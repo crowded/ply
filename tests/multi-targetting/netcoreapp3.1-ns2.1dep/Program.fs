@@ -1,6 +1,6 @@
 ﻿// Learn more about F# at http://fsharp.org
 
-open netstandard2.Say
+open netstandard21.Say
 
 [<EntryPoint>]
 let main argv =

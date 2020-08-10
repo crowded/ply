@@ -10,7 +10,7 @@
     <NeutralLanguage>en-US</NeutralLanguage>
 
     <!-- Build settings -->
-    <TargetFrameworks>netcoreapp2.1; netstandard2.0</TargetFrameworks>
+    <TargetFramework>netstandard2.0</TargetFramework>
     <DebugType>portable</DebugType>
     <OutputType>Library</OutputType>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -42,6 +42,7 @@
   
   <ItemGroup>
     <PackageReference Update="FSharp.Core" Version="4.6.2" />
+    <PackageReference Include="System.Threading.Tasks.Extensions" Version="4.5.4" />
   </ItemGroup>
 
   <ItemGroup>
