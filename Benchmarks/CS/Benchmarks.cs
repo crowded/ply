@@ -17,16 +17,16 @@ namespace CS
         {
             await Task.Yield();
             var arb = await Task.Run(ArbitraryWork(workFactor));
+            async Task<int> Func() => await new ValueTask<int>(arb);
+            var v = await Func();
 
             var i = loopCount;
             while (i > 0)
             {
-                var a = await Task.Run(ArbitraryWork(workFactor)).ConfigureAwait(false);
+                if (i % 2 == 0)
+                    await Task.Run(ArbitraryWork(workFactor)).ConfigureAwait(false);
                 i = i - 1;
             }
-
-            Func<ValueTask<int>> x = async () => await new ValueTask<int>(arb);
-            var v = await x();
 
             if (v > 0)
             {

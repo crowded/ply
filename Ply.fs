@@ -5,12 +5,7 @@
 
 #if NETSTANDARD2_0
 namespace System.Runtime.CompilerServices
-
-    open System
-    open System.Runtime.CompilerServices
-    open System.Runtime.InteropServices
-    [<AttributeUsage(AttributeTargets.All,AllowMultiple=false)>]
-    [<Sealed>]
+    [<Sealed; System.AttributeUsage(System.AttributeTargets.All,AllowMultiple=false)>]
     type IsReadOnlyAttribute() =
         inherit System.Attribute()
 #endif
@@ -20,194 +15,158 @@ open System
 open System.Runtime.CompilerServices
 open System.Runtime.InteropServices
 open System.Threading.Tasks
-open System.Diagnostics
 open System.Runtime.ExceptionServices
 
-module Internal =
-    type [<AbstractClass;AllowNullLiteral>] Awaitable<'u>() =
-        abstract member Await<'t when 't :> IAwaitingMachine> : machine: byref<'t> -> bool
-        abstract member GetNext: unit -> Ply<'u>
-    and IAwaitingMachine = 
+#nowarn "1204"
+
+module internal Internal =
+    type [<AllowNullLiteral>] IAwaitable<'u> =
+        abstract member Await : machine: byref<#IAwaitingMachine> -> unit
+        abstract member Continuation : (unit -> Ply<'u>)
+    and IAwaitingMachine =
         abstract member AwaitUnsafeOnCompleted<'awt when 'awt :> ICriticalNotifyCompletion> : awt: byref<'awt> -> unit
 
-type [<IsReadOnly; Struct>] Ply<'u> =
-    val internal value : 'u
-    val internal awaitable : Internal.Awaitable<'u> 
-    new(result: 'u) = { value = result; awaitable = null }
-    new(await: Internal.Awaitable<'u>) = { value = Unchecked.defaultof<_>; awaitable = await }
-    member this.IsCompletedSuccessfully = Object.ReferenceEquals(this.awaitable, null)
-    member this.Result = if this.IsCompletedSuccessfully then this.value else this.awaitable.GetNext().Result
+type [<IsReadOnly;Struct;NoComparison;NoEquality>] Ply<'u> =
+    val private value : 'u
+    val private awaitable : Internal.IAwaitable<'u>
+    new(result: 'u) = { value = result; awaitable = Unchecked.defaultof<_>; }
+    internal new(await) = { value = Unchecked.defaultof<_>; awaitable = await }
+    member this.IsCompletedSuccessfully = isNull this.awaitable
+    member internal this.Awaitable = this.awaitable
+    member internal this.Continuation = this.awaitable.Continuation
+    member this.Result = if this.IsCompletedSuccessfully then this.value else this.Continuation().Result
 
 [<System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)>]
 /// Entrypoint for generated code
 module TplPrimitives =
     open Internal
-    
-    type IAwaiterMethods<'awt, 'res when 'awt :> ICriticalNotifyCompletion> = 
-        abstract member IsCompleted: byref<'awt> -> bool
-        abstract member GetResult: byref<'awt> -> 'res
 
     let inline createBuilder() = 
         AsyncValueTaskMethodBuilder<_>()
 
     let inline defaultof<'T> = Unchecked.defaultof<'T>
-
-    let inline isNull x = Object.ReferenceEquals(x, null)
-    let inline isNotNull x = not (isNull x)
- 
+    let inline unbox<'T> (x: obj) : 'T = LanguagePrimitives.IntrinsicFunctions.UnboxFast x
     let ret x = Ply(result = x)
     let zero = ret ()
 
-    let forceThrowEx = "|PlyForceThrowEx|"
-
-    type TplResult<'t> = Result<'t, ExceptionDispatchInfo>
+    type ExceptionDispatchInfo with
+        member inline x.Raise() = x.Throw(); defaultof<_>
 
     // https://github.com/dotnet/coreclr/pull/15781/files
-    type [<Struct;CompilerGenerated>]ContinuationStateMachine<'u> =
+    type [<Struct;CompilerGenerated;NoComparison;NoEquality>] internal ContinuationStateMachine<'u> =
         val Builder : AsyncValueTaskMethodBuilder<'u> 
-        val mutable private next: Ply<'u>
-        val mutable private inspect: bool
         val mutable private continuation: unit -> Ply<'u>
 
-        new(continuation) = { 
-            Builder = createBuilder()
-            continuation = continuation
-            next = defaultof<_>
-            inspect = true
-        }
+        new(awaitable) = { Builder = createBuilder(); continuation = fun () -> Ply(await = awaitable) }
+        new(continuation) = { Builder = createBuilder(); continuation = continuation }
 
-        new(ply) = { 
-            Builder = createBuilder()
-            continuation = defaultof<_>
-            next = ply
-            inspect = true
-        }            
-
-        member private this.RunContinuation() =
-            this.next <- this.continuation()
-            this.continuation <- defaultof<_>
-                
         interface IAwaitingMachine with
-            [<DebuggerStepThrough>]
-            [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
             member this.AwaitUnsafeOnCompleted(awt: byref<'awt>) =
                 this.Builder.AwaitUnsafeOnCompleted(&awt, &this)
 
         interface IAsyncStateMachine with
             // This method is effectively deprecated on .NET Core so only .NET Fx will still call this.
-            member this.SetStateMachine(csm) = 
+            member this.SetStateMachine(csm) =
                 this.Builder.SetStateMachine(csm)
-            
-            member this.MoveNext() =                    
-                let mutable ex = defaultof<Exception>
+
+            member this.MoveNext() =
+                let mutable ex = null
                 try
-                    if isNotNull this.continuation then this.RunContinuation()
+                    let next = this.continuation()
+                    if next.IsCompletedSuccessfully then
+                        this.Builder.SetResult(next.Result)
+                    else
+                        this.continuation <- next.Continuation
+                        next.Awaitable.Await(&this)
+                with exn -> ex <- exn
 
-                    let mutable fin = false
-                    while not fin do
-                        if this.inspect then
-                            let next = this.next
-                            if this.next.IsCompletedSuccessfully then
-                                fin <- true
-                                this.Builder.SetResult(this.next.value) 
-                            else 
-                                this.inspect <- false                         
-                                let yielded = next.awaitable.Await(&this)
-                                // MoveNext will be called again by the builder once await is done.
-                                if yielded then
-                                    fin <- true
-                        else
-                            this.inspect <- true
-                            this.next <- this.next.awaitable.GetNext()
-                with exn ->
-                    ex <- exn 
-                
-                if isNotNull ex then 
-                    this.Builder.SetException(ex)
+                if not (isNull ex) then this.Builder.SetException(ex)
 
-    and [<Sealed>] TplAwaitable<'methods, 'awt, 't, 'u when 'methods :> IAwaiterMethods<'awt, 't> and 'awt :> ICriticalNotifyCompletion> =
-        inherit Awaitable<'u>
-        
-        val private awaiterMethods: 'methods
-        val mutable private awaiter: 'awt
-        val private continuation: TplResult<'t> -> Ply<'u>
-        
-        new(awaiterMethods, awaiter, continuation) = {
-            awaiterMethods = awaiterMethods
-            awaiter = awaiter
-            continuation = continuation
-        }
-        
-        override this.Await(csm) =
-            if this.awaiterMethods.IsCompleted &this.awaiter then
-                false
-            else
-                csm.AwaitUnsafeOnCompleted(&this.awaiter) |> ignore
-                true 
+    and [<Sealed>] internal TplAwaitable<'awt, 'u when 'awt :> ICriticalNotifyCompletion>(awaiter: 'awt, cont: unit -> Ply<'u>) =
+        let mutable awaiter = awaiter
+        interface IAwaitable<'u> with
+            member _.Await(csm) = csm.AwaitUnsafeOnCompleted(&awaiter)
+            member _.Continuation = cont
 
-        override this.GetNext() = 
-            Debug.Assert(this.awaiterMethods.IsCompleted &this.awaiter || (typeof<'awt> = typeof<YieldAwaitable.YieldAwaiter>), "Forcing an async here")
+    and [<AbstractClass>] NoEdiFSharpFunc<'t,'u>() =
+        inherit FSharpFunc<'t,'u>()
+        // Removes "--- End of stack trace from previous location where exception was thrown ---"
+        // from implementers that catch exceptions for the purpose of passing them along as Edi.
+        // See https://github.com/dotnet/coreclr/pull/15781/files
+        interface IAsyncStateMachine with
+            member _.SetStateMachine csm = failwith "not implemented"
+            member _.MoveNext() = failwith "not implemented"
 
-            let result =
-                try
-                    Ok(this.awaiterMethods.GetResult &this.awaiter)
-                with ex ->
-                    Error(ExceptionDispatchInfo.Capture(ex))
-
-            this.continuation result
-
-    and [<Sealed>] PlyAwaitable<'t, 'u> (awaitable: Awaitable<'t>, continuation: 't -> Ply<'u>) =
-        inherit Awaitable<'u>()
+    // Unfortunate to have two almost identical awaitables; combining them either makes for poor stack traces or worse perf.
+    and [<Sealed;CompilerGenerated>] internal PlyAwaitable<'t,'u>(awaitable: IAwaitable<'t>, cont: Result<'t, ExceptionDispatchInfo> -> Ply<'u>) =
+        inherit NoEdiFSharpFunc<unit, Ply<'u>>()
         let mutable awaitable = awaitable
 
-        override __.Await(csm) = awaitable.Await(&csm)
+        override this.Invoke r =
+            let mutable (next: Ply<'t>, edi: ExceptionDispatchInfo) = defaultof<_>, null
+            // Make sure we run the inner continuation alone in this try block.
+            try next <- awaitable.Continuation()
+            with ex -> edi <- ExceptionDispatchInfo.Capture(ex)
 
-        override this.GetNext() = 
-            let next = awaitable.GetNext()
-            if next.IsCompletedSuccessfully then
-                continuation (next.value)
-            else
-                awaitable <- next.awaitable
-                Ply(await = this)
-
-    and [<Sealed>] LoopAwaitable(initialAwaitable : Awaitable<unit>, cond: unit -> bool, body : unit -> Ply<unit>) = 
-        inherit Awaitable<unit>()
-        let mutable awaitable : Awaitable<unit> = initialAwaitable
-
-        member private this.RepeatBody() =
-            if cond() then
-                let next = body()
-                if next.IsCompletedSuccessfully then 
-                    this.RepeatBody()
+            if isNull edi then
+                if next.IsCompletedSuccessfully then
+                    cont(Ok next.Result)
                 else
-                    awaitable <- next.awaitable
-                    Ply(await = this)
-            else zero
-            
-        override __.Await(csm) = awaitable.Await(&csm)
-
-        override this.GetNext() =
-            let next = awaitable.GetNext()
-            if next.IsCompletedSuccessfully then
-                this.RepeatBody()
+                    awaitable <- next.Awaitable
+                    Ply<_>(await = this)
             else
-                awaitable <- next.awaitable
-                Ply(await = this)
+                cont(Error edi)
+
+        interface IAwaitable<'u> with
+            member _.Await(csm) = awaitable.Await(&csm)
+            // `:> obj` here is critical to preventing fsc from generating an FSharpFunc wrapping ours for some reason.
+            member this.Continuation = this :> obj |> unbox<_>
+
+    and [<Sealed;CompilerGenerated>] internal AwaitableContinuation<'s,'t,'u>(state: 's, ply: Ply<'t>, cont: AwaitableContinuation<'s,'t,'u> -> Ply<'u>) =
+        inherit NoEdiFSharpFunc<unit,Ply<'u>>()
+        let mutable ply, exceptionDispatchInfo = ply, defaultof<_>
+        override this.Invoke r =
+            // See if we're created with a completed ply result, sometimes happens when we need result suspension (like ediPly)
+            if ply.IsCompletedSuccessfully then
+                cont this
+            else
+
+            let mutable (next: Ply<'t>, edi: ExceptionDispatchInfo) = defaultof<_>, null
+            // Make sure we run the inner continuation alone in this try block.
+            try next <- ply.Awaitable.Continuation()
+            with ex -> edi <- ExceptionDispatchInfo.Capture(ex)
+
+            if isNull edi then
+                if next.IsCompletedSuccessfully then
+                    ply <- Ply<_>(result = next.Result)
+                    cont this
+                else
+                    ply <- next; Ply(await = this)
+            else
+                exceptionDispatchInfo <- edi
+                cont this
+
+        // For iterative continuations
+        member this.SetAwaitable(next) = ply <- next
+
+        member this.State = state
+        member this.IsCompletedSuccessfully = isNull exceptionDispatchInfo
+        member this.Value = ply
+        member this.Edi = exceptionDispatchInfo
+
+        interface IAwaitable<'u> with
+            member this.Await(csm) = ply.Awaitable.Await(&csm)
+            // `:> obj` here is critical to preventing fsc from generating an FSharpFunc wrapping ours for some reason.
+            member this.Continuation = this :> obj |> unbox<_>
 
     // Not inlined to protect implementation details
-    let ediPly (edi: ExceptionDispatchInfo) = 
-        Ply(await = { new Awaitable<'u>() with 
-                    override __.Await(_) = false
-                    override __.GetNext() = 
-                        edi.Throw()
-                        defaultof<_>
-                })
+    let ediPly (edi: ExceptionDispatchInfo) =
+        Ply(await = (AwaitableContinuation((), Ply<_>(result = edi), fun this -> this.Value.Result.Raise())))
 
     // Runs any continuation directly, without any execution context capture, but still suspending any exceptions.
     // Exceptions outside a builder can happen here during Bind when an awaiter is completed but GetResult throws.
-    let inline runUnwrappedAsPly (f: unit -> Ply<'u>) : Ply<'u> = 
-        try f()
-        with ex -> ediPly (ExceptionDispatchInfo.Capture ex)
+    let inline runUnwrappedAsPly (f: unit -> Ply<'u>) : Ply<'u> =
+        try f() with ex -> ediPly (ExceptionDispatchInfo.Capture ex)
 
     let run (f: unit -> Ply<'u>) : ValueTask<'u> =
         // ContinuationStateMachine contains a mutable struct so we need to prevent struct copies.
@@ -215,21 +174,26 @@ module TplPrimitives =
         x.Builder.Start(&x)
         x.Builder.Task
 
-    let runPly (ply: Ply<'u>) : ValueTask<'u>  =
-        let mutable x = ContinuationStateMachine<_>(ply)
-        x.Builder.Start(&x)
-        x.Builder.Task
+    let runPly (ply: Ply<'u>) : ValueTask<'u> =
+        if ply.IsCompletedSuccessfully then
+            let mutable b = createBuilder()
+            b.SetResult(ply.Result)
+            b.Task
+        else
+            let mutable x = ContinuationStateMachine<_>(ply.Awaitable)
+            x.Builder.Start(&x)
+            x.Builder.Task
 
     // This won't correctly prevent AsyncLocal leakage or SyncContext switches but it does save us the closure alloc
     // Making only this version completely alloc free for the fast path...
     // Read more here https://github.com/dotnet/coreclr/blob/027a9105/src/System.Private.CoreLib/src/System/Runtime/CompilerServices/AsyncMethodBuilder.cs#L954
     let inline runUnwrapped (f: unit -> Ply<'u>) : ValueTask<'u>  =
         let next = runUnwrappedAsPly f
-        if next.IsCompletedSuccessfully then 
+        if next.IsCompletedSuccessfully then
             let mutable b = createBuilder()
             b.SetResult(next.Result)
             b.Task
-        else 
+        else
             runPly next
 
     let runAsTask (f: unit -> Ply<'u>) : Task<'u> =
@@ -238,259 +202,216 @@ module TplPrimitives =
         x.Builder.Start(&x)
         x.Builder.Task.AsTask()
 
-    let runPlyAsTask (ply: Ply<'u>) : Task<'u>  =
-        let mutable x = ContinuationStateMachine<_>(ply)
-        x.Builder.Start(&x)
-        x.Builder.Task.AsTask()
+    let runPlyAsTask (ply: Ply<'u>) : Task<'u> =
+        let task =
+            if ply.IsCompletedSuccessfully then
+                let mutable b = createBuilder()
+                b.SetResult(ply.Result)
+                b.Task
+            else
+                let mutable x = ContinuationStateMachine<_>(ply.Awaitable)
+                x.Builder.Start(&x)
+                x.Builder.Task
+
+        task.AsTask()
 
     // This won't correctly prevent AsyncLocal leakage or SyncContext switches but it does save us the closure alloc
     // Making only this version completely alloc free for the fast path...
     // Read more here https://github.com/dotnet/coreclr/blob/027a9105/src/System.Private.CoreLib/src/System/Runtime/CompilerServices/AsyncMethodBuilder.cs#L954
     let inline runUnwrappedAsTask (f: unit -> Ply<'u>) : Task<'u> =
         let next = runUnwrappedAsPly f
-        if next.IsCompletedSuccessfully then 
+        if next.IsCompletedSuccessfully then
             let mutable b = createBuilder()
             b.SetResult(next.Result)
             b.Task.AsTask()
         else 
             runPlyAsTask next
 
-    let combine (ply : Ply<unit>) (continuation : unit -> Ply<'b>) =
-        if ply.IsCompletedSuccessfully then 
-            continuation() 
-        else 
-            Ply(await = PlyAwaitable<unit, 'b>(ply.awaitable, continuation))
+    let combine (ply : Ply<unit>) (continuation : unit -> Ply<'u>) =
+        if ply.IsCompletedSuccessfully then continuation()
+        else
+            Ply(await = (AwaitableContinuation(continuation, ply, fun this -> this.State())))
+
+    let tryWith(continuation : unit -> Ply<'u>) (catch : exn -> Ply<'u>) =
+        try
+            let next = continuation()
+            if next.IsCompletedSuccessfully then
+                next
+            else
+                Ply(await = (AwaitableContinuation(catch, next, fun this -> if this.IsCompletedSuccessfully then this.Value else this.State this.Edi.SourceException)))
+        with ex -> catch ex
+
+    let rec tryFinally (continuation : unit -> Ply<'u>) (finallyBody : unit -> unit) =
+        try
+            let next = continuation()
+            if next.IsCompletedSuccessfully then
+                finallyBody(); next
+            else
+                Ply(await = (AwaitableContinuation(finallyBody, next, fun this -> this.State(); if this.IsCompletedSuccessfully then this.Value else this.Edi.Raise();)))
+        with ex ->
+            finallyBody()
+            reraise()
 
     let rec whileLoop (cond : unit -> bool) (body : unit -> Ply<unit>) =
         // As long as we never yield loops are allocation free
         if cond() then
             let next = body()
-            if next.IsCompletedSuccessfully then 
+            if next.IsCompletedSuccessfully then
                 whileLoop cond body
             else
-                Ply(await = LoopAwaitable(next.awaitable, cond, body))
+                let cont = AwaitableContinuation(struct(cond,body), next, fun this ->
+                    let struct(cond, body) = this.State
+                    let mutable awaitable = zero
+                    while cond() && awaitable.IsCompletedSuccessfully do
+                        let next = body()
+                        if not next.IsCompletedSuccessfully then
+                            this.SetAwaitable(next)
+                            awaitable <- Ply(await = this)
+                    awaitable)
+                Ply(await = cont)
         else zero
- 
-    let tryWith(continuation : unit -> Ply<'u>) (catch : exn -> Ply<'u>) =
-        try
-            let next = continuation()
-            if next.IsCompletedSuccessfully then next else 
-                let mutable awaitable = next.awaitable
-                Ply(await = { new Awaitable<'u>() with 
-                    override __.Await(csm) = awaitable.Await(&csm)
-                    override this.GetNext() = 
-                        try 
-                            let next = awaitable.GetNext()
-                            if next.IsCompletedSuccessfully then next else
-                                awaitable <- next.awaitable
-                                Ply(await = this)
-                        with ex ->
-                            let edi = ExceptionDispatchInfo.Capture(ex)
-                            try catch ex
-                            // 'Fix' for https://github.com/dotnet/fsharp/issues/8529 hopefully this can soon be removed.
-                            // It is much less common for user code to raise the same exception again with the intent of obscuring traces
-                            // than it is to have exception filters where it's expected the trace stays intact if it doesn't match any filter.
-                            // Yet we have no way of discriminating correct user code doing `raise ex` from the incorrect compiler generated call.
-                            // Therefore we also examine ex.Data[forceThrowEx] to opt out of our own incorrect (but preferable) behavior.
-                            with catchEx when obj.ReferenceEquals(catchEx, ex) && not <| ex.Data.Contains(forceThrowEx) ->
-                                edi.Throw()
-                                defaultof<_>
-                })
-        with ex ->
-            let edi = ExceptionDispatchInfo.Capture(ex)
-            try catch ex
-            // 'Fix' for https://github.com/dotnet/fsharp/issues/8529 hopefully this can soon be removed.
-            // It is much less common for user code to raise the same exception again with the intent of obscuring traces
-            // than it is to have exception filters where it's expected the trace stays intact if it doesn't match any filter.
-            // Yet we have no way of discriminating correct user code doing `raise ex` from the incorrect compiler generated call.
-            // Therefore we also examine ex.Data[forceThrowEx] to opt out of our own incorrect (but preferable) behavior.
-            with catchEx when obj.ReferenceEquals(catchEx, ex) && not <| ex.Data.Contains(forceThrowEx) ->
-                edi.Throw()
-                defaultof<_>
 
+    let inline using (disposable : #IDisposable) (body : #IDisposable -> Ply<'u>) =
+        tryFinally (fun () -> body disposable) (fun () -> disposable.Dispose())
 
-    let tryFinally (continuation : unit -> Ply<'u>) (finallyBody : unit -> unit) =
-        let inline withFinally f = 
-            try f()
-            with ex -> 
-                finallyBody()
-                reraise()
-
-        let next = withFinally continuation
-        if next.IsCompletedSuccessfully then 
-            finallyBody()
-            next 
-        else 
-            let mutable awaitable = next.awaitable
-            Ply(await = { new Awaitable<'u>() with 
-                override __.Await(csm) = awaitable.Await(&csm)
-                override this.GetNext() = 
-                    let next = withFinally awaitable.GetNext
-                    if next.IsCompletedSuccessfully then 
-                        finallyBody()
-                        next
-                    else
-                        awaitable <- next.awaitable
-                        Ply(await = this)
-            })
-
-    let using (disposable : #IDisposable) (body : #IDisposable -> Ply<'u>) =
-        tryFinally 
-            (fun () -> body disposable) 
-            (fun () -> if isNotNull disposable then disposable.Dispose())
-
-    let forLoop (sequence : 'a seq) (body : 'a -> Ply<unit>) =
+    let inline forLoop (sequence : 'a seq) (body : 'a -> Ply<unit>) =
         using (sequence.GetEnumerator()) (fun e -> whileLoop e.MoveNext (fun () -> body e.Current))
 
-    type [<Struct>]TaskAwaiterMethods<'t> = 
-        interface IAwaiterMethods<TaskAwaiter<'t>, 't> with 
+
+    // These types exist for backwards compatibility until 1.0
+    // Some types here are supposed to always be instantiated at unit see https://github.com/dotnet/fsharp/issues/9913
+    type IAwaiterMethods<'awt, 'res when 'awt :> ICriticalNotifyCompletion> =
+        abstract member IsCompleted: byref<'awt> -> bool
+        abstract member GetResult: byref<'awt> -> 'res
+
+    type [<IsReadOnly;Struct;NoComparison;NoEquality>]TaskAwaiterMethods<'t> =
+        interface IAwaiterMethods<TaskAwaiter<'t>, 't> with
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult()
-    and [<Struct>]UnitTaskAwaiterMethods<'t> =
-        interface IAwaiterMethods<TaskAwaiter, 't> with 
+    and [<IsReadOnly;Struct;NoComparison;NoEquality>]UnitTaskAwaiterMethods<'t> =
+        interface IAwaiterMethods<TaskAwaiter, 't> with
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult(); defaultof<_> // Always unit
 
-    and [<Struct>]ConfiguredTaskAwaiterMethods<'t> = 
-        interface IAwaiterMethods<ConfiguredTaskAwaitable<'t>.ConfiguredTaskAwaiter, 't> with 
+    and [<IsReadOnly;Struct;NoComparison;NoEquality>]ConfiguredTaskAwaiterMethods<'t> =
+        interface IAwaiterMethods<System.Runtime.CompilerServices.ConfiguredTaskAwaitable<'t>.ConfiguredTaskAwaiter, 't> with
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult()
-    and [<Struct>]ConfiguredUnitTaskAwaiterMethods<'t> = 
-        interface IAwaiterMethods<ConfiguredTaskAwaitable.ConfiguredTaskAwaiter, 't> with 
+    and [<IsReadOnly;Struct;NoComparison;NoEquality>]ConfiguredUnitTaskAwaiterMethods<'t> =
+        interface IAwaiterMethods<ConfiguredTaskAwaitable.ConfiguredTaskAwaiter, 't> with
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult(); defaultof<_> // Always unit
 
-    and [<Struct>]YieldAwaiterMethods<'t> = 
-        interface IAwaiterMethods<YieldAwaitable.YieldAwaiter, 't> with 
+    and [<IsReadOnly;Struct;NoComparison;NoEquality>]YieldAwaiterMethods<'t> =
+        interface IAwaiterMethods<System.Runtime.CompilerServices.YieldAwaitable.YieldAwaiter, 't> with
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult(); defaultof<_> // Always unit
 
-    and [<Struct>]GenericAwaiterMethods<'awt, 't when 'awt :> ICriticalNotifyCompletion> = 
-        interface IAwaiterMethods<'awt, 't> with 
+    and [<IsReadOnly;Struct;NoComparison;NoEquality>]GenericAwaiterMethods<'awt, 't when 'awt :> ICriticalNotifyCompletion> =
+        interface IAwaiterMethods<'awt, 't> with
             member __.IsCompleted awt = false // Always await, this way we don't have to specialize per awaiter
             member __.GetResult awt = defaultof<_> // Always unit because we wrap this continuation to always be unit -> Ply<'u>
 
-    and [<IsReadOnly; Struct>]ValueTaskAwaiterMethods<'t> =
-        interface IAwaiterMethods<ValueTaskAwaiter<'t>, 't> with 
+    and [<IsReadOnly;Struct;NoComparison;NoEquality>]ValueTaskAwaiterMethods<'t> =
+        interface IAwaiterMethods<ValueTaskAwaiter<'t>, 't> with
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult()
-    and [<IsReadOnly; Struct>]UnitValueTaskAwaiterMethods<'t> =
-        interface IAwaiterMethods<ValueTaskAwaiter, 't> with 
+    and [<IsReadOnly;Struct;NoComparison;NoEquality>]UnitValueTaskAwaiterMethods<'t> =
+        interface IAwaiterMethods<ValueTaskAwaiter, 't> with
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult(); defaultof<_> // Always unit
 
-    and [<IsReadOnly; Struct>]ConfiguredValueTaskAwaiterMethods<'t> =
-        interface IAwaiterMethods<ConfiguredValueTaskAwaitable<'t>.ConfiguredValueTaskAwaiter, 't> with 
+    and [<IsReadOnly;Struct;NoComparison;NoEquality>]ConfiguredValueTaskAwaiterMethods<'t> =
+        interface IAwaiterMethods<ConfiguredValueTaskAwaitable<'t>.ConfiguredValueTaskAwaiter, 't> with
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult()
-    and [<IsReadOnly; Struct>]ConfiguredUnitValueTaskAwaiterMethods<'t> = 
-        interface IAwaiterMethods<ConfiguredValueTaskAwaitable.ConfiguredValueTaskAwaiter, 't> with 
+    and [<IsReadOnly;Struct;NoComparison;NoEquality>]ConfiguredUnitValueTaskAwaiterMethods<'t> =
+        interface IAwaiterMethods<ConfiguredValueTaskAwaitable.ConfiguredValueTaskAwaiter, 't> with
             member __.IsCompleted awt = awt.IsCompleted
             member __.GetResult awt = awt.GetResult(); defaultof<_> // Always unit
 
     type Binder<'u>() =
-        // Each Bind method here has an extraneous fun x -> cont x in its body for optimization purposes.
-        // It does not actually allocate an extra closure as it's seen as an alias by the compiler -
-        // but it does help delay 'cont' from allocating until we really need it as an FSharpFunc.
-        // The IsCompleted branch works fine without the alloc because it inlines all the way up the CE.
-        // It's a mess really...
-        
-        // Secondly, for every GetResult — because all calls to bind overloads are wrapped by TaskBuilder.Run — we are
-        // already running within our own Excecution context bubble. No need to be careful calling GetResult. 
-
-        // Await exists for binary compatibility.
+        // Exists for binary compatibility reasons until 1.0
         static member Await<'methods, 'awt, 't when 'methods :> IAwaiterMethods<'awt, 't>>(awt: byref<'awt>, cont: 't -> Ply<'u>) =
-            Ply(await = TplAwaitable(defaultof<'methods>, awt, fun r -> match r with Ok t -> cont t | Error e -> e.Throw(); defaultof<_>))
+            let awt = awt in Ply(await = TplAwaitable<_,_>(awt, fun () -> let mutable awt = awt in cont (defaultof<'methods>.GetResult(&awt))))
 
-        // We keep Await non inline to protect internals to maximize binary compatibility.
-        static member AwaitResult<'methods, 'awt, 't when 'methods :> IAwaiterMethods<'awt, 't>>(awt: byref<'awt>, cont: TplResult<'t> -> Ply<'u>) =
-            Ply(await = TplAwaitable(defaultof<'methods>, awt, cont))
+        // We keep Await non inline to protect internals for maximum binary compatibility.
+        static member Await<'awt, 't when 'awt :> ICriticalNotifyCompletion>(awt: byref<'awt>, cont: unit -> Ply<'u>) =
+            Ply(await = TplAwaitable<_,_>(awt,cont))
 
-        static member inline Specialized<'methods, ^awt, 't 
-                                when 'methods :> IAwaiterMethods< ^awt, 't> 
-                                and ^awt :> ICriticalNotifyCompletion
+        static member inline Tpl< ^awt, 't
+                                when ^awt :> ICriticalNotifyCompletion
                                 and ^awt : (member get_IsCompleted: unit -> bool)
-                                and ^awt : (member GetResult: unit -> 't) >  
-            (awt: ^awt, cont: 't -> Ply<'u>) = 
-            if (^awt : (member get_IsCompleted: unit -> bool) (awt)) then  
+                                and ^awt : (member GetResult: unit -> 't) >
+            (awt: ^awt, cont: 't -> Ply<'u>) =
+            if (^awt : (member get_IsCompleted: unit -> bool) (awt)) then
                 cont (^awt : (member GetResult: unit -> 't) (awt))
             else
-                let mutable mutAwt = awt
-                // Having the edi.Throw here means user stack frames will get captured, as this code will get inlined into cont.
-                Binder<'u>.AwaitResult<'methods,_,_>(&mutAwt, (fun r -> match r with Ok t -> cont t | Error e -> e.Throw(); defaultof<_>))
+                // Having GetResult here means user stack frames will get captured, as this code will get inlined into cont.
+                let mutable mutAwt = awt in Binder<'u>.Await<_,_>(&mutAwt, fun () -> cont (^awt : (member GetResult : unit -> 't) (awt)))
 
-        // We have special treatment for unknown taskLike types where we wrap the continuation in a unit func
-        // This allows us to use a single GenericAwaiterMethods type (zero alloc, small drop in perf) instead of an object expression.
-        static member inline Generic(task: ^taskLike, cont: 't -> Ply<'u>) =
-            let awt = (^taskLike : (member GetAwaiter: unit -> ^awt) (task))
-            if (^awt : (member get_IsCompleted: unit -> bool) (awt)) then  
-                cont (^awt : (member GetResult: unit -> 't) (awt))
-            else
-                // Leave original awt symbol immutable, otherwise it'll cost us an FsharpRef due to the capture.
-                let mutable mutAwt = awt
-                // This continuation closure is actually also just one alloc as the compiler simplifies the 'would be' cont into this one.
-                Binder<'u>.Await<GenericAwaiterMethods<_,_>,_,_>(&mutAwt, (fun () -> cont (^awt : (member GetResult : unit -> 't) (awt))))
+        // Exists for binary compatibility reasons until 1.0
+        static member PlyAwait(ply: Ply<'t>, cont: 't -> Ply<'u>) =
+            Ply(await = (AwaitableContinuation(cont, ply, fun this -> if this.IsCompletedSuccessfully then this.State this.Value.Result else this.Edi.Raise())))
 
-        static member PlyAwait(ply: Ply<'t>, cont: 't -> Ply<'u>) = 
-            Ply(await = PlyAwaitable(ply.awaitable, (fun x -> cont x)))
+        static member PlyAwait(ply: Ply<'t>, resultCont: Result<'t, ExceptionDispatchInfo> -> Ply<'u>) =
+            Ply(await = (PlyAwaitable(ply.Awaitable, resultCont)))
 
-        static member inline Ply(ply: Ply<'t>, cont: 't -> Ply<'u>) = 
-            if ply.IsCompletedSuccessfully then 
-                cont ply.Result 
-            else 
-                Binder<'u>.PlyAwait(ply, (fun x -> cont x))
+        static member inline Ply(ply: Ply<'t>, cont: 't -> Ply<'u>) =
+            if ply.IsCompletedSuccessfully then cont ply.Result
+            else Binder.PlyAwait(ply, fun (r: Result<'t, ExceptionDispatchInfo>) -> match r with Ok v -> cont v | Error edi -> edi.Raise())
 
     // Supporting types to have the compiler do what we want with respect to overload resolution.
     type Id<'t> = class end
     type Default2() = class end
     type Default1() = inherit Default2()
 
-    type Bind() = 
+    type Bind() =
         inherit Default1()
 
-        static member inline Invoke (task, cont: 't -> Ply<'u>) = 
+        static member inline Invoke (taskLike, cont: 't -> Ply<'u>) =
             let inline call_2 (task: ^b, cont, a: ^a) = ((^a or ^b) : (static member Bind : _*_*_ -> Ply<'u>) task, cont, a)
             let inline call (task: 'b, cont, a: 'a) = call_2 (task, cont, a)
-            call(task, cont, defaultof<Bind>)
+            call(taskLike, cont, defaultof<Bind>)
 
-        static member inline Bind(task: ^taskLike, cont: 't -> Ply<'u>, [<Optional>]_impl:Default2) = 
-            Binder<'u>.Generic(task, cont)
+        static member inline Bind(taskLike: ^taskLike, cont: 't -> Ply<'u>, [<Optional>]_impl:Default2) =
+            Binder<'u>.Tpl<_,_>((^taskLike : (member GetAwaiter: unit -> ^awt) (taskLike)), cont)
 
-        static member inline Bind(task: Task, cont: unit -> Ply<'u>, [<Optional>]_impl:Default1) = 
-            Binder<'u>.Specialized<UnitTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont)
+        static member inline Bind(unitTask: Task, cont: unit -> Ply<'u>, [<Optional>]_impl:Default1) =
+            Binder<'u>.Tpl<_,_>(unitTask.GetAwaiter(), cont)
 
-        static member inline Bind(task: Task<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
-            Binder<'u>.Specialized<TaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont)
-     
-        static member inline Bind(task: ConfiguredTaskAwaitable<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
-            Binder<'u>.Specialized<ConfiguredTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont)
-    
-        static member inline Bind(task: ConfiguredTaskAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) =
-            Binder<'u>.Specialized<ConfiguredUnitTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
+        static member inline Bind(task: Task<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) =
+            Binder<'u>.Tpl<_,_>(task.GetAwaiter(), cont)
 
-        static member inline Bind(task: YieldAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) =
-            Binder<'u>.Specialized<YieldAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
+        static member inline Bind(configuredTask: ConfiguredTaskAwaitable<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) =
+            Binder<'u>.Tpl<_,_>(configuredTask.GetAwaiter(), cont)
 
-        static member inline Bind(async: Async<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
-            Binder<'u>.Specialized<TaskAwaiterMethods<_>,_,_>((Async.StartAsTask async).GetAwaiter(), cont)
+        static member inline Bind(configuredUnitTask: ConfiguredTaskAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) =
+            Binder<'u>.Tpl<_,_>(configuredUnitTask.GetAwaiter(), cont)
 
-        static member inline Bind(ply: Ply<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
+        static member inline Bind(yieldAwaitable: YieldAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) =
+            Binder<'u>.Tpl<_,_>(yieldAwaitable.GetAwaiter(), cont)
+
+        static member inline Bind(async: Async<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) =
+            Binder<'u>.Tpl<_,_>((Async.StartAsTask async).GetAwaiter(), cont)
+
+        static member inline Bind(ply: Ply<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) =
             Binder<'u>.Ply(ply, cont)
 
-        static member inline Bind(_: Id<'t>, _: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
+        static member inline Bind(_: Id<'t>, _: 't -> Ply<'u>, [<Optional>]_impl:Bind) =
             failwith "Used for forcing delayed resolution."
 
-        static member inline Bind(task: ValueTask<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
-            Binder<'u>.Specialized<ValueTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
-        
-        static member inline Bind(task: ValueTask, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) = 
-            Binder<'u>.Specialized<UnitValueTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
+        static member inline Bind(valueTask: ValueTask<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) =
+            Binder<'u>.Tpl<_,_>(valueTask.GetAwaiter(), cont)
 
-        static member inline Bind(task: ConfiguredValueTaskAwaitable<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) = 
-            Binder<'u>.Specialized<ConfiguredValueTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
+        static member inline Bind(unitValueTask: ValueTask, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) =
+            Binder<'u>.Tpl<_,_>(unitValueTask.GetAwaiter(), cont)
 
-        static member inline Bind(task: ConfiguredValueTaskAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) = 
-            Binder<'u>.Specialized<ConfiguredUnitValueTaskAwaiterMethods<_>,_,_>(task.GetAwaiter(), cont) 
+        static member inline Bind(configuredValueTask: ConfiguredValueTaskAwaitable<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) =
+            Binder<'u>.Tpl<_,_>(configuredValueTask.GetAwaiter(), cont)
+
+        static member inline Bind(configuredUnitValueTask: ConfiguredValueTaskAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Bind) =
+            Binder<'u>.Tpl<_,_>(configuredUnitValueTask.GetAwaiter(), cont)
 
     type AwaitableBuilder() =
         member inline __.Delay(body : unit -> Ply<'t>) = body
@@ -500,7 +421,7 @@ module TplPrimitives =
         member inline __.ReturnFrom(task: ^taskLike)                        = Bind.Invoke(task, ret)
         member inline __.Bind(task: ^taskLike, continuation: 't -> Ply<'u>) = Bind.Invoke(task, continuation)
 
-        member inline __.Combine(ply : Ply<unit>, continuation: unit -> Ply<'t>)          = combine ply continuation
+        member inline __.Combine(ply : Ply<unit>, continuation: unit -> Ply<'u>)          = combine ply continuation
         member inline __.While(condition : unit -> bool, body : unit -> Ply<unit>)        = whileLoop condition body
         member inline __.TryWith(body : unit -> Ply<'t>, catch : exn -> Ply<'t>)          = tryWith body catch
         member inline __.TryFinally(body : unit -> Ply<'t>, finallyBody : unit -> unit)   = tryFinally body finallyBody

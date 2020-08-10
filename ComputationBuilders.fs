@@ -3,7 +3,6 @@
 // Copyright (c) 2019 Crowded B.V.
 // Distributed under the MIT License (https://opensource.org/licenses/MIT).
 
-#nowarn "44"
 namespace FSharp.Control.Tasks
 
 open Ply
@@ -40,7 +39,7 @@ module Builders =
 
     let unitVtask = UnitValueTaskBuilder()
 
-    module Unsafe = 
+    module Unsafe =
         type UnsafePlyBuilder() =
             inherit AwaitableBuilder()
             member inline __.Run(f : unit -> Ply<'u>) = runUnwrappedAsPly f
@@ -60,10 +59,10 @@ module Builders =
             member inline __.Run(f : unit -> Ply<'u>) = runUnwrapped f
 
         let uvtask = UnsafeValueTaskBuilder()
-        
+
         type UnsafeUnitValueTaskBuilder() =
             inherit AwaitableBuilder()
-            member inline __.Run(f : unit -> Ply<'u>) = 
+            member inline __.Run(f : unit -> Ply<'u>) =
                 let t = runUnwrapped f
                 if t.IsCompletedSuccessfully then ValueTask() else ValueTask(t.AsTask() :> Task)
 

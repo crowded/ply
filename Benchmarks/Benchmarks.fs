@@ -37,37 +37,37 @@ type MicroBenchmark() =
             ret() |> ignore
 
 [<MemoryDiagnoser>]
-[<SimpleJob(targetCount = 20)>]
+[<SimpleJob(targetCount = 15)>]
 type TaskBuildersBenchmark() =
     let oldTask = ContextSensitive.task
     
     let arbitraryWork(work) = CS.Benchmarks.ArbitraryWork(work)
 
-    // Keep at 100 minimum otherwise the C# version will do an await while the F# version
+    // Keep at 200 minimum otherwise the C# version will do an await while the F# version
     // gets IsCompleted true due to a few more calls in between running and checking
-    let workFactor = 100
-    let loopCount = 5
+    let workFactor = 200
+    let loopCount = 100000
 
     [<Benchmark(Description = "Ply")>]
     member _.TaskBuilderOpt () =
         (task {
             do! Task.Yield()
             let! arb = Task.Run(arbitraryWork workFactor)
-            let! v = vtask {
+            let! v = task {
                 return! ValueTask<_>(arb)
             }
 
             let mutable i = loopCount
-            while i > 0 do 
-                let! y = Task.Run(arbitraryWork workFactor).ConfigureAwait(false)
-                i <- i - 1 
-                return ()
-
+            while i > 0 do
+                if i % 2 = 0 then
+                    let! y = Task.Run(arbitraryWork workFactor).ConfigureAwait(false)
+                    ()
+                i <- i - 1
             if v > 0 then return! ValueTask<_>(v) else return 0
         }).Result
 
     [<Benchmark(Description = "TaskBuilder.fs v2.1.0")>]
-    member _.TaskBuilder () =  
+    member _.TaskBuilder () =
         (oldTask {
             do! Task.Yield()
             let! arb = Task.Run(arbitraryWork workFactor)
@@ -76,11 +76,11 @@ type TaskBuildersBenchmark() =
             }
 
             let mutable i = loopCount
-            while i > 0 do 
-                let! y = Task.Run(arbitraryWork workFactor).ConfigureAwait(false)
-                i <- i - 1 
-                return ()
-
+            while i > 0 do
+                if i % 2 = 0 then
+                    let! y = Task.Run(arbitraryWork workFactor).ConfigureAwait(false)
+                    ()
+                i <- i - 1
             if v > 0 then return! ValueTask<_>(v) else return 0
         }).Result
 
