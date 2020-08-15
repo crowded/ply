@@ -262,7 +262,7 @@ module TplPrimitives =
                 let cont = AwaitableContinuation(struct(cond,body), next, fun this ->
                     let struct(cond, body) = this.State
                     let mutable awaitable = zero
-                    while cond() && awaitable.IsCompletedSuccessfully do
+                    while awaitable.IsCompletedSuccessfully && cond() do
                         let next = body()
                         if not next.IsCompletedSuccessfully then
                             this.SetAwaitable(next)
@@ -272,11 +272,10 @@ module TplPrimitives =
         else zero
 
     let inline using (disposable : #IDisposable) (body : #IDisposable -> Ply<'u>) =
-        tryFinally (fun () -> body disposable) (fun () -> disposable.Dispose())
+        tryFinally (fun () -> body disposable) (fun () -> if not(isNull(disposable :> obj)) then disposable.Dispose())
 
     let inline forLoop (sequence : 'a seq) (body : 'a -> Ply<unit>) =
         using (sequence.GetEnumerator()) (fun e -> whileLoop e.MoveNext (fun () -> body e.Current))
-
 
     // These types exist for backwards compatibility until 1.0
     // Some types here are supposed to always be instantiated at unit see https://github.com/dotnet/fsharp/issues/9913
