@@ -376,15 +376,6 @@ module TplPrimitives =
             let inline call (task: 'b, cont, a: 'a) = call_2 (task, cont, a)
             call(taskLike, cont, m)
 
-        static member inline Bind(taskLike: ^taskLike, cont: 't -> Ply<'u>, [<Optional>]_impl:Default3) =
-            Binder<'u>.Tpl<_,_>((^taskLike : (member GetAwaiter: unit -> ^awt) (taskLike)), cont)
-
-        static member inline Bind(unitTask: Task, cont: unit -> Ply<'u>, [<Optional>]_impl:Default2) =
-            Binder<'u>.Tpl<_,_>(unitTask.GetAwaiter(), cont)
-
-        static member inline Bind(task: Task<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Default1) =
-            Binder<'u>.Tpl<_,_>(task.GetAwaiter(), cont)
-
         static member inline Bind(configuredTask: ConfiguredTaskAwaitable<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Default1) =
             Binder<'u>.Tpl<_,_>(configuredTask.GetAwaiter(), cont)
 
@@ -394,17 +385,8 @@ module TplPrimitives =
         static member inline Bind(yieldAwaitable: YieldAwaitable, cont: unit -> Ply<'u>, [<Optional>]_impl:Default1) =
             Binder<'u>.Tpl<_,_>(yieldAwaitable.GetAwaiter(), cont)
 
-        static member inline Bind(async: Async<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Default1) =
-            Binder<'u>.Tpl<_,_>((Async.StartAsTask async).GetAwaiter(), cont)
-
         static member inline Bind(_: Id<'t>, _: 't -> Ply<'u>, [<Optional>]_impl:Default1) =
             failwith "Used for forcing delayed resolution."
-
-        static member inline Bind(valueTask: ValueTask<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Default1) =
-            Binder<'u>.Tpl<_,_>(valueTask.GetAwaiter(), cont)
-
-        static member inline Bind(unitValueTask: ValueTask, cont: unit -> Ply<'u>, [<Optional>]_impl:Default1) =
-            Binder<'u>.Tpl<_,_>(unitValueTask.GetAwaiter(), cont)
 
         static member inline Bind(configuredValueTask: ConfiguredValueTaskAwaitable<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Default1) =
             Binder<'u>.Tpl<_,_>(configuredValueTask.GetAwaiter(), cont)
@@ -415,17 +397,69 @@ module TplPrimitives =
         static member inline Bind(ply: Ply<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Bind) =
             Binder<'u>.Ply(ply, cont)
 
+    type AffineBind() =
+        inherit Bind()
+
+        static member inline Bind(taskLike: ^taskLike, cont: 't -> Ply<'u>, [<Optional>]_impl:Default3) =
+            Binder<'u>.Tpl<_,_>((^taskLike : (member GetAwaiter: unit -> ^awt) (taskLike)), cont)
+
+        static member inline Bind(unitTask: Task, cont: unit -> Ply<'u>, [<Optional>]_impl:Default2) =
+            Binder<'u>.Tpl<_,_>(unitTask.GetAwaiter(), cont)
+
+        static member inline Bind(task: Task<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Default1) =
+            Binder<'u>.Tpl<_,_>(task.GetAwaiter(), cont)
+
+        static member inline Bind(async: Async<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Default1) =
+            Binder<'u>.Tpl<_,_>((Async.StartAsTask async).GetAwaiter(), cont)
+
+        static member inline Bind(valueTask: ValueTask<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Default1) =
+            Binder<'u>.Tpl<_,_>(valueTask.GetAwaiter(), cont)
+
+        static member inline Bind(unitValueTask: ValueTask, cont: unit -> Ply<'u>, [<Optional>]_impl:Default1) =
+            Binder<'u>.Tpl<_,_>(unitValueTask.GetAwaiter(), cont)
+
+    type NonAffineBind() =
+        inherit Bind()
+
+        static member inline Bind(taskLike: ^taskLike, cont: 't -> Ply<'u>, [<Optional>]_impl:Default3) =
+            Binder<'u>.Tpl<_,_>((^taskLike : (member GetAwaiter: unit -> ^awt) (taskLike)), cont)
+
+        static member inline Bind(taskLike: ^taskLike, cont: 't -> Ply<'u>, [<Optional>]_impl:Default3) =
+            let configured = (^taskLike : (member ConfigureAwait : bool -> ^awaitable)(taskLike, false))
+            Binder<'u>.Tpl<_,_>((^awaitable : (member GetAwaiter: unit -> ^awt) (configured)), cont)
+
+        static member inline Bind(unitTask: Task, cont: unit -> Ply<'u>, [<Optional>]_impl:Default2) =
+            Binder<'u>.Tpl<_,_>(unitTask.ConfigureAwait(false).GetAwaiter(), cont)
+
+        static member inline Bind(task: Task<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Default1) =
+            Binder<'u>.Tpl<_,_>(task.ConfigureAwait(false).GetAwaiter(), cont)
+
+        static member inline Bind(async: Async<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Default1) =
+            Binder<'u>.Tpl<_,_>((Async.StartAsTask async).ConfigureAwait(false).GetAwaiter(), cont)
+
+        static member inline Bind(valueTask: ValueTask<'t>, cont: 't -> Ply<'u>, [<Optional>]_impl:Default1) =
+            Binder<'u>.Tpl<_,_>(valueTask.ConfigureAwait(false).GetAwaiter(), cont)
+
+        static member inline Bind(unitValueTask: ValueTask, cont: unit -> Ply<'u>, [<Optional>]_impl:Default1) =
+            Binder<'u>.Tpl<_,_>(unitValueTask.ConfigureAwait(false).GetAwaiter(), cont)
+
     type AwaitableBuilder() =
         member inline __.Delay(body : unit -> Ply<'t>) = body
         member inline __.Return(x)                     = ret x
         member inline __.Zero()                        = zero
-
-        member inline __.ReturnFrom(task: ^taskLike)                        = Bind.Invoke(defaultof<Bind>, task, ret)
-        member inline __.Bind(task: ^taskLike, continuation: 't -> Ply<'u>) = Bind.Invoke(defaultof<Bind>, task, continuation)
-
         member inline __.Combine(ply : Ply<unit>, continuation: unit -> Ply<'u>)          = combine ply continuation
         member inline __.While(condition : unit -> bool, body : unit -> Ply<unit>)        = whileLoop condition body
         member inline __.TryWith(body : unit -> Ply<'t>, catch : exn -> Ply<'t>)          = tryWith body catch
         member inline __.TryFinally(body : unit -> Ply<'t>, finallyBody : unit -> unit)   = tryFinally body finallyBody
         member inline __.Using(disposable : #IDisposable, body : #IDisposable -> Ply<'u>) = using disposable body
         member inline __.For(sequence : seq<_>, body : _ -> Ply<unit>)                    = forLoop sequence body
+
+    type AffineBuilder() =
+        inherit AwaitableBuilder()
+        member inline __.ReturnFrom(task: ^taskLike)                        = Bind.Invoke(defaultof<AffineBind>, task, ret)
+        member inline __.Bind(task: ^taskLike, continuation: 't -> Ply<'u>) = Bind.Invoke(defaultof<AffineBind>, task, continuation)
+
+    type NonAffineBuilder() =
+        inherit AwaitableBuilder()
+        member inline __.ReturnFrom(task: ^taskLike)                        = Bind.Invoke(defaultof<NonAffineBind>, task, ret)
+        member inline __.Bind(task: ^taskLike, continuation: 't -> Ply<'u>) = Bind.Invoke(defaultof<NonAffineBind>, task, continuation)

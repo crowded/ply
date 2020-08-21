@@ -3,8 +3,8 @@ namespace Benchmarks
 open BenchmarkDotNet.Attributes
 open System.Threading.Tasks
 open FSharp.Control.Tasks.V2 // TaskBuilder.fs
-open FSharp.Control.Tasks.Builders // Ply
-open FSharp.Control.Tasks.Builders.Unsafe // Ply
+open FSharp.Control.Tasks // Ply
+open FSharp.Control.Tasks.Affine.Unsafe // Ply
 
 [<MemoryDiagnoser>]
 [<SimpleJob(targetCount = 10)>]

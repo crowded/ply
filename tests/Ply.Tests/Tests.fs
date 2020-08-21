@@ -7,7 +7,37 @@ open System.Diagnostics
 open System.Threading
 open System.Threading.Tasks
 open Xunit
+
+open FSharp.Control.Tasks.NonAffine
+
+type TaskLike() =
+    member _.GetAwaiter() = Task.Yield().GetAwaiter()
+
+let ``Non-affine taskLike without ConfigureAwait should work`` =
+    task {
+        let! x = TaskLike()
+        return ()
+    }
+
+type ConfigurableTaskLike() =
+    member _.ConfigureAwait(b) = Task.Yield()
+
+let ``Non-affine taskLike with ConfigureAwait should work`` =
+    task {
+        let! x = ConfigurableTaskLike()
+        return ()
+    }
+
 open FSharp.Control.Tasks
+
+type AffineTaskLike() =
+    member _.GetAwaiter() = Task.Yield().GetAwaiter()
+
+let ``Affine taskLike should work`` =
+    task {
+        let! x = AffineTaskLike()
+        return ()
+    }
 
 [<Fact>]
 let ``Combine should handle side effects of left portion`` () =
