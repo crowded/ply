@@ -9,6 +9,10 @@ Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Benchmarks", "Benchmarks\Be
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CS", "Benchmarks\CS\CS.csproj", "{4146B8F5-27B5-493D-9F74-4AA530469562}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{3799082F-4B66-419A-82B7-051BAD304718}"
+EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Ply.Tests", "tests\Ply.Tests\Ply.Tests.fsproj", "{918E5168-79DC-4957-9D80-3B731AB85BDB}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -58,8 +62,21 @@ Global
 		{4146B8F5-27B5-493D-9F74-4AA530469562}.Release|x64.Build.0 = Release|Any CPU
 		{4146B8F5-27B5-493D-9F74-4AA530469562}.Release|x86.ActiveCfg = Release|Any CPU
 		{4146B8F5-27B5-493D-9F74-4AA530469562}.Release|x86.Build.0 = Release|Any CPU
+		{918E5168-79DC-4957-9D80-3B731AB85BDB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{918E5168-79DC-4957-9D80-3B731AB85BDB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{918E5168-79DC-4957-9D80-3B731AB85BDB}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{918E5168-79DC-4957-9D80-3B731AB85BDB}.Debug|x64.Build.0 = Debug|Any CPU
+		{918E5168-79DC-4957-9D80-3B731AB85BDB}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{918E5168-79DC-4957-9D80-3B731AB85BDB}.Debug|x86.Build.0 = Debug|Any CPU
+		{918E5168-79DC-4957-9D80-3B731AB85BDB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{918E5168-79DC-4957-9D80-3B731AB85BDB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{918E5168-79DC-4957-9D80-3B731AB85BDB}.Release|x64.ActiveCfg = Release|Any CPU
+		{918E5168-79DC-4957-9D80-3B731AB85BDB}.Release|x64.Build.0 = Release|Any CPU
+		{918E5168-79DC-4957-9D80-3B731AB85BDB}.Release|x86.ActiveCfg = Release|Any CPU
+		{918E5168-79DC-4957-9D80-3B731AB85BDB}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{4146B8F5-27B5-493D-9F74-4AA530469562} = {975E9B88-80E4-4925-819F-55663ACCC7D4}
+		{918E5168-79DC-4957-9D80-3B731AB85BDB} = {3799082F-4B66-419A-82B7-051BAD304718}
 	EndGlobalSection
 EndGlobal
