@@ -150,8 +150,8 @@ module TplPrimitives =
         member this.SetAwaitable(next) = ply <- next
 
         member this.State = state
-        member this.IsCompletedSuccessfully = isNull exceptionDispatchInfo
         member this.Value = ply
+        member this.IsCompletedSuccessfully = this.Value.IsCompletedSuccessfully
         member this.Edi = exceptionDispatchInfo
 
         interface IAwaitable<'u> with
@@ -230,7 +230,7 @@ module TplPrimitives =
     let combine (ply : Ply<unit>) (continuation : unit -> Ply<'u>) =
         if ply.IsCompletedSuccessfully then continuation()
         else
-            Ply(await = (AwaitableContinuation(continuation, ply, fun this -> this.State())))
+            Ply(await = (AwaitableContinuation(continuation, ply, fun this -> if this.IsCompletedSuccessfully then this.State() else this.Edi.Raise())))
 
     let tryWith(continuation : unit -> Ply<'u>) (catch : exn -> Ply<'u>) =
         try
@@ -247,7 +247,7 @@ module TplPrimitives =
             if next.IsCompletedSuccessfully then
                 finallyBody(); next
             else
-                Ply(await = (AwaitableContinuation(finallyBody, next, fun this -> this.State(); if this.IsCompletedSuccessfully then this.Value else this.Edi.Raise();)))
+                Ply(await = (AwaitableContinuation(finallyBody, next, fun this -> this.State(); if this.IsCompletedSuccessfully then this.Value else this.Edi.Raise())))
         with ex ->
             finallyBody()
             reraise()
@@ -260,6 +260,8 @@ module TplPrimitives =
                 whileLoop cond body
             else
                 let cont = AwaitableContinuation(struct(cond,body), next, fun this ->
+                    // Every resumption we go through could end in a stored exception
+                    if not this.IsCompletedSuccessfully then this.Edi.Raise()
                     let struct(cond, body) = this.State
                     let mutable awaitable = zero
                     while awaitable.IsCompletedSuccessfully && cond() do
