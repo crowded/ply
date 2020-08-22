@@ -155,13 +155,20 @@ module TplPrimitives =
         member this.Edi = exceptionDispatchInfo
 
         interface IAwaitable<'u> with
-            member this.Await(csm) = ply.Awaitable.Await(&csm)
+            member this.Await(csm) =
+                // See if we're created with a completed ply result, sometimes happens when we need result suspension (like ediPly)
+                // Yielding here is not great but the other option is re-introducing a hasYielded bool return value so MoveNext knows it should not unwind.
+                // As this is rarely used - uply users that synchronously complete with an exception - the tradeoff is worth the cost of a dispatch.
+                if ply.IsCompletedSuccessfully then
+                    let mutable awt = Task.Yield().GetAwaiter() in csm.AwaitUnsafeOnCompleted(&awt)
+                else
+                    ply.Awaitable.Await(&csm)
             // `:> obj` here is critical to preventing fsc from generating an FSharpFunc wrapping ours for some reason.
             member this.Continuation = this :> obj |> unbox<_>
 
     // Not inlined to protect implementation details
     let ediPly (edi: ExceptionDispatchInfo) =
-        Ply(await = (AwaitableContinuation((), Ply<_>(result = edi), fun this -> this.Value.Result.Raise())))
+        Ply(await = (AwaitableContinuation(edi, Ply<_>(result = edi), fun this -> this.Value.Result.Raise())))
 
     // Runs any continuation directly, without any execution context capture, but still suspending any exceptions.
     // Exceptions outside a builder can happen here during Bind when an awaiter is completed but GetResult throws.

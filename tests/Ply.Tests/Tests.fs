@@ -4,6 +4,7 @@ open System
 open System.Collections.Generic
 open System.Collections
 open System.Diagnostics
+open System.Runtime.ExceptionServices
 open System.Threading
 open System.Threading.Tasks
 open Xunit
@@ -38,6 +39,21 @@ let ``Affine taskLike should work`` =
         let! x = AffineTaskLike()
         return ()
     }
+
+
+[<Fact>]
+let ``ediPly should work`` () =
+    let p = Unsafe.uply {
+        try
+            let! r = Task.FromException(InvalidOperationException("Expected"))
+            return r
+        with ex -> return ExceptionDispatchInfo.Throw(ex)
+    }
+
+    Assert.ThrowsAsync(typeof<InvalidOperationException>, fun () -> unitTask {
+        return! p
+    })
+
 
 [<Fact>]
 let ``Combine should handle side effects of left portion`` () =
