@@ -245,8 +245,20 @@ module TplPrimitives =
             if next.IsCompletedSuccessfully then
                 next
             else
-                Ply(await = (AwaitableContinuation(catch, next, fun this -> if this.IsCompletedSuccessfully then this.Value else this.State this.Edi.SourceException)))
-        with ex -> catch ex
+                let cont = AwaitableContinuation(catch, next, fun this ->
+                    if this.IsCompletedSuccessfully then this.Value
+                    else
+                        try
+                            this.State this.Edi.SourceException
+                        with ex ->
+                            if ex = this.Edi.SourceException then
+                                this.Edi.Raise ()
+                            else
+                                reraise ()
+                )
+                Ply(await = cont)
+        with ex ->
+            catch ex
 
     let rec tryFinally (continuation : unit -> Ply<'u>) (finallyBody : unit -> unit) =
         try
