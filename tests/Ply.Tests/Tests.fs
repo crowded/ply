@@ -309,7 +309,11 @@ let testTryFinallySadPath() =
     try
         t.Wait()
     with
-    | _ -> ()
+    | :? AggregateException as e ->
+        match e.InnerExceptions |> Seq.toList with
+        | [TestException "uhoh"] -> ()
+        | _ -> raise e
+    | e -> raise e
     require ran "never ran"
 
 [<Fact>]
@@ -327,7 +331,11 @@ let testTryFinallyCaught() =
                     ran <- true
                 return 1
             with
-            | _ -> return 2
+            | TestException "uhoh" ->
+                return 2
+            | e ->
+                raise e
+                return 3
         }
     require (t.Result = 2) "wrong return"
     require ran "never ran"
