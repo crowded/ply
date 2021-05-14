@@ -16,16 +16,16 @@ The goal of Ply is to be a very low overhead Task abstraction like it is in C#.
 ### Builders
 Ply comes bundled with these builders: 
 
-| builder          | return type   | tfm                           | namespace                            |
-|---------------|---------------|-------------------------------|--------------------------------------|
-| `task`        | Task<'T>      | netstandard2.0, netcoreapp2.1 | FSharp.Control.Tasks.Builders        |
-| `vtask`       | ValueTask<'T> | netcoreapp2.1                 | FSharp.Control.Tasks.Builders        |
-| `unitTask`    | Task          | netstandard2.0, netcoreapp2.1 | FSharp.Control.Tasks.Builders        |
-| `unitVtask`   | ValueTask     | netcoreapp2.1                 | FSharp.Control.Tasks.Builders        |
-| `uvtask`      | ValueTask<'T> | netcoreapp2.1                 | FSharp.Control.Tasks.Builders.Unsafe |
-| `uunitTask`   | Task          | netcoreapp2.1                 | FSharp.Control.Tasks.Builders.Unsafe |
-| `uunintVtask` | ValueTask     | netcoreapp2.1                 | FSharp.Control.Tasks.Builders.Unsafe |
-| `uply`        | Ply<'T>       | netstandard2.0,netcoreapp2.1  | FSharp.Control.Tasks.Builders.Unsafe |
+| builder       | return type   | tfm                           | namespace                          |
+|---------------|---------------|-------------------------------|------------------------------------|
+| `task`        | Task<'T>      | netstandard2.0, netcoreapp2.1 | FSharp.Control.Tasks               |
+| `vtask`       | ValueTask<'T> | netcoreapp2.1                 | FSharp.Control.Tasks               |
+| `unitTask`    | Task          | netstandard2.0, netcoreapp2.1 | FSharp.Control.Tasks               |
+| `unitVtask`   | ValueTask     | netcoreapp2.1                 | FSharp.Control.Tasks               |
+| `uvtask`      | ValueTask<'T> | netcoreapp2.1                 | FSharp.Control.Tasks.Affine.Unsafe |
+| `uunitTask`   | Task          | netcoreapp2.1                 | FSharp.Control.Tasks.Affine.Unsafe |
+| `uunintVtask` | ValueTask     | netcoreapp2.1                 | FSharp.Control.Tasks.Affine.Unsafe |
+| `uply`        | Ply<'T>       | netstandard2.0,netcoreapp2.1  | FSharp.Control.Tasks.Affine.Unsafe |
 
 
 More information on when to use which builder:
