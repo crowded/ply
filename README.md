@@ -1,4 +1,7 @@
 # Ply
+
+[![NuGet Version](https://img.shields.io/nuget/v/Ply.svg)](https://www.nuget.org/packages/Ply)
+
 ## Ply is a high performance TPL library for F#.    
 The goal of Ply is to be a very low overhead Task abstraction like it is in C#. 
 
